@@ -7,9 +7,10 @@ uninstall surveys and announcements.
 credential storage and error handling. **S4.2 (lifecycle)** adds registration on
 activation and status updates on deactivate/uninstall. **S4.3 (telemetry)** adds
 the local queue, `track()`, and batched sending on a schedule. **S4.4 (consent)**
-adds the site owner's prompt and the accept/reject/change flow. Survey and
-announcement helpers are still to come; today you call `post()` / `get()` for
-those.
+adds the site owner's prompt and the accept/reject/change flow. **S4.5 (survey)**
+adds the deactivation survey, and **S4.6 (announcements)** the messages you send
+to your installations. That is the whole SDK surface — every endpoint in the zone
+now has a helper.
 
 Requires PHP 7.2+. No runtime dependencies.
 
@@ -411,6 +412,178 @@ touched. `Sdk::uninstall()` deletes it; the server keeps the permanent
 
 ---
 
+## Deactivation survey (S4.5)
+
+Nothing to wire. `Sdk::bootstrap()` registers the modal, and if your product
+has no survey configured in Appneck, nothing appears at all.
+
+When someone clicks **Deactivate** on the plugins screen, the click is
+intercepted and a modal asks your configured questions — radio, checkbox,
+rating, dropdown and free text, rendered from whatever the organization set
+up. Then the plugin deactivates.
+
+If the SDK could not read your plugin's name from its file header, set it so
+the prompt can say who is asking:
+
+```php
+$sdk->deactivation_survey()->set_product_name( 'Acme Bookings' );
+```
+
+### Deactivation always wins
+
+| The site owner… | What happens |
+|---|---|
+| answers and submits | the answers are sent, then the plugin deactivates |
+| clicks **Skip & deactivate** | nothing is sent, the plugin deactivates |
+| submits and the API is down | the failure is logged, the plugin deactivates |
+| has no survey configured | no modal at all, the plugin deactivates |
+| closes the modal (X, Escape, backdrop) | **cancelled** — the plugin stays active |
+
+Only the last one stops a deactivation, and it is the one the owner asked
+for. Everything else proceeds: this is feedback collection, never a gate —
+the same rule as "activation never waits on the API", at the other end of
+the lifecycle. Closing the box is deliberately a *cancel* rather than a
+skip, because treating a stray Escape key as "yes, deactivate this" would
+be worse than asking again.
+
+### One attempt, no retry
+
+Unlike telemetry there is no queue and no retry. The moment has passed —
+the plugin is being deactivated as the request goes out — and the server
+records one response per installation anyway, so a resurrected submission
+days later would be a duplicate at best.
+
+**A failed submission is never shown to the site owner**, and that is
+forced rather than chosen: the only place to show it would be the admin
+screen loaded *after* deactivation, and a deactivated plugin runs no code,
+so it cannot render a notice. Holding the modal open to apologise makes our
+failure into their delay. So the failure goes to the `Logger` (opt-in) and
+nowhere else.
+
+### Questions are cached
+
+Fetched from `GET /sdk/v1/survey-questions` and cached for 12 hours,
+including the "no survey configured" answer — they are needed at the instant
+of a click, which is the worst moment to make a network call someone is
+waiting on, and the empty answer is the common case. A *failed* fetch is not
+cached: a 500 is not evidence that your product has no survey.
+
+### Validation happens twice, on purpose
+
+`Survey::validate()` mirrors the server's rules (a choice must be one of the
+configured choices, a rating within its configured max, free text under 2000
+characters) so a mistake appears next to the field instead of as a rejection
+nobody sees. It is a UX affordance, not a boundary — the server re-checks
+everything, and if the two ever disagree the deactivation still proceeds.
+
+An unanswered question is not an error: every question is optional, blank
+fields are omitted from the submission, and an entirely blank form is
+treated as a skip rather than stored as an empty response.
+
+### Assets
+
+The markup, CSS and JS print inline in the footer of `plugins.php` only —
+no enqueued files, because a bundled SDK cannot know its own URL (it may
+live in `vendor/`, a custom directory, or a mu-plugin), and no requests on
+any other admin screen. The script is ES5 and uses `XMLHttpRequest`, so it
+needs no build step and works on whatever browser wp-admin is being driven
+from.
+
+---
+
+## Announcements (S4.6)
+
+Messages you publish in Appneck, shown to your installations. Fetching and
+caching is automatic; **where they display is up to you**, because an
+announcement from your product has no business on another plugin's screen:
+
+```php
+// once, at bootstrap — printed only on that one screen
+$sdk->announcement_notices()->render_on_screen( 'settings_page_acme' );
+
+// or call it directly inside your own settings page callback
+$sdk->announcement_notices()->render();
+```
+
+Either way it prints **nothing at all** when there is nothing to show — no
+empty container — so it is safe to call unconditionally.
+
+Want to render them yourself instead?
+
+```php
+foreach ( $sdk->announcements()->visible() as $announcement ) {
+    // id, type, title, body, starts_at, expires_at
+}
+```
+
+### Not consent-gated
+
+Announcements are authenticated but **not** gated on the site owner's
+telemetry consent, and the SDK deliberately does not add a gate the server
+doesn't have. Consent governs data collected *from* a site; this is content
+sent *to* it, and someone who declined telemetry has not asked to stop being
+told about a security release.
+
+### No second cron schedule
+
+The refresh hangs off the **existing** heartbeat tick (`appneck_sdk_flush`,
+15 minutes by default) as one more listener — there is no announcements
+schedule to create, clear or reason about. Reading is pure cache, so
+rendering your settings page never waits on the network.
+
+For sites where WP-Cron cannot run at all, there is one fallback: if the
+cache is over 12 hours old **and** the site owner is on your settings
+screen, one refresh is attempted, rate-limited to once an hour whether it
+succeeds or not. Never on any other admin page.
+
+### What a failed refresh does: nothing
+
+| Response | Cached list |
+|---|---|
+| `200` with announcements | replaced |
+| `200` empty (all unpublished or expired) | replaced — they stop showing |
+| `403` (installation not active) | **kept** |
+| `500` / network failure | **kept** |
+
+A failed poll is not evidence that you stopped announcing anything, and
+blanking the list because a request timed out would make a security notice
+vanish. Expiry is the server's job: it evaluates the validity window on
+every request, and the SDK deliberately does not re-check it locally — a
+site clock a few minutes out would otherwise hide something you chose to
+send.
+
+### Display
+
+All undismissed announcements stack, **most urgent type first**, and the
+server's own recency decides within a type — so a Security Notice is never
+queued behind a discount. At most three print at once; the rest surface as
+earlier ones are dismissed. Type maps onto WordPress's own notice levels:
+
+| Type | Notice |
+|---|---|
+| `security` | `notice-error` |
+| `update` | `notice-warning` |
+| `feature` | `notice-info` |
+| `discount` | `notice-success` |
+
+Titles and bodies are escaped and line breaks preserved; no HTML from the
+server is ever rendered.
+
+### Dismissal
+
+Per announcement, stored on the site — there is nothing to tell the server,
+since this endpoint is display-only with no read tracking. The dismissal
+lives in its own option, **not** in the cached list, which is the point:
+the cache is replaced wholesale on every refresh, so a dismissal kept
+inside it would be forgotten on the next tick and the announcement would
+come back while still inside its validity window.
+
+The Dismiss control is a nonced POST gated on `manage_options`, not core's
+dismissible X — core's X is added by its own JS and only hides the box for
+that page view, which is the opposite of what a stored dismissal means.
+
+---
+
 ## Signing
 
 Every request is HMAC-signed per journal §9.2a:
@@ -463,6 +636,11 @@ docker compose run --rm --no-deps -v "$(pwd)/packages:/packages" \
 #   tests/integration/lifecycle-check.php  <base_url> <api_key> <product_secret>
 #   tests/integration/telemetry-check.php  <base_url> <api_key> <product_secret> [<domain>]
 #   tests/integration/consent-check.php    <base_url> <api_key> <product_secret> [<domain>]
+#   tests/integration/survey-check.php     <base_url> <api_key> <product_secret> \
+#                                          [<other_api_key> <other_secret>] [<domain>]
+#   tests/integration/announcements-check.php  <base_url> <api_key> <product_secret> \
+#                                          [<other_api_key> <other_secret>] [<domain>]
+#     (author the announcements in the Org Panel first — see the file header)
 ```
 
 The unit suite runs with **no Composer autoloader and no WordPress**, on purpose:

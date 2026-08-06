@@ -2,7 +2,9 @@
 
 namespace Appneck\Sdk;
 
+use Appneck\Sdk\Admin\AnnouncementNotices;
 use Appneck\Sdk\Admin\ConsentNotice;
+use Appneck\Sdk\Admin\DeactivationSurvey;
 use Appneck\Sdk\Http\Transport;
 use Appneck\Sdk\Queue\EventQueue;
 use Appneck\Sdk\Queue\TableEventQueue;
@@ -92,12 +94,43 @@ final class Sdk {
 			null !== $plugin_name ? array( 'product_name' => $plugin_name ) : array()
 		);
 
+		// S4.5: the deactivation survey. Its own key rather than reading
+		// Consent's, so neither depends on the other's option naming.
+		$survey            = new Survey( $client, $logger );
+		$deactivationKey   = substr( hash( 'sha256', $api_key ), 0, 32 );
+		$deactivationSurvey = new DeactivationSurvey(
+			$survey,
+			$deactivationKey,
+			$plugin_file,
+			null !== $plugin_name ? array( 'product_name' => $plugin_name ) : array()
+		);
+
+		// S4.6: announcements. register_hooks() adds a listener to the
+		// EXISTING heartbeat tick rather than a schedule of its own, and
+		// the notices deliberately print nowhere until the host plugin
+		// names its own screen — see AnnouncementNotices' class doc.
+		$announcements      = new Announcements( $client, $logger );
+		$announcementNotice = new AnnouncementNotices( $announcements, $deactivationKey );
+
 		$lifecycle->register_hooks();
 		$telemetry->register_hooks();
 		$consent->register_hooks();
 		$notice->register_hooks();
+		$deactivationSurvey->register_hooks();
+		$announcements->register_hooks();
+		$announcementNotice->register_hooks();
 
-		return new Plugin( $client, $lifecycle, $telemetry, $consent, $notice );
+		return new Plugin(
+			$client,
+			$lifecycle,
+			$telemetry,
+			$consent,
+			$notice,
+			$survey,
+			$deactivationSurvey,
+			$announcements,
+			$announcementNotice
+		);
 	}
 
 	/**
@@ -139,6 +172,15 @@ final class Sdk {
 		// auditable is lost. Cleared after on_uninstall(), which needs the
 		// credentials that call is signed with.
 		( new Consent( $client, null, $logger ) )->forget();
+
+		// The cached survey questions are the plugin's data too, and a
+		// stale copy would otherwise outlive the plugin that fetched it.
+		( new Survey( $client, $logger ) )->forget();
+
+		// Cached announcements and this site's dismissals go with the
+		// plugin too — nothing on the server tracks either (journal 9.3b
+		// is display-only), so this is the only copy there was.
+		( new Announcements( $client, $logger ) )->forget();
 
 		return $response;
 	}

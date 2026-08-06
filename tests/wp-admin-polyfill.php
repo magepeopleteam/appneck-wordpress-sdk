@@ -63,6 +63,20 @@ if ( ! function_exists( 'check_admin_referer' ) ) {
 	}
 }
 
+if ( ! function_exists( 'check_ajax_referer' ) ) {
+	function check_ajax_referer( $action, $query_arg = false, $stop = true ) {
+		$GLOBALS['appneck_test_admin']['checked'][] = (string) $action;
+
+		return (bool) $GLOBALS['appneck_test_admin']['nonce_ok'];
+	}
+}
+
+if ( ! function_exists( 'wp_unslash' ) ) {
+	function wp_unslash( $value ) {
+		return is_string( $value ) ? stripslashes( $value ) : $value;
+	}
+}
+
 if ( ! function_exists( 'wp_get_referer' ) ) {
 	function wp_get_referer() {
 		return $GLOBALS['appneck_test_admin']['referer'];

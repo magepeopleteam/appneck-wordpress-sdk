@@ -2,7 +2,9 @@
 
 namespace Appneck\Sdk;
 
+use Appneck\Sdk\Admin\AnnouncementNotices;
 use Appneck\Sdk\Admin\ConsentNotice;
+use Appneck\Sdk\Admin\DeactivationSurvey;
 
 /**
  * What Sdk::bootstrap() hands back: the one object a plugin author keeps
@@ -37,18 +39,38 @@ final class Plugin {
 	/** @var ConsentNotice|null */
 	private $consent_notice;
 
+	/** @var Survey|null */
+	private $survey;
+
+	/** @var DeactivationSurvey|null */
+	private $deactivation_survey;
+
+	/** @var Announcements|null */
+	private $announcements;
+
+	/** @var AnnouncementNotices|null */
+	private $announcement_notices;
+
 	public function __construct(
 		Client $client,
 		Lifecycle $lifecycle,
 		Telemetry $telemetry,
 		?Consent $consent = null,
-		?ConsentNotice $consent_notice = null
+		?ConsentNotice $consent_notice = null,
+		?Survey $survey = null,
+		?DeactivationSurvey $deactivation_survey = null,
+		?Announcements $announcements = null,
+		?AnnouncementNotices $announcement_notices = null
 	) {
-		$this->client         = $client;
-		$this->lifecycle      = $lifecycle;
-		$this->telemetry      = $telemetry;
-		$this->consent        = $consent;
-		$this->consent_notice = $consent_notice;
+		$this->client              = $client;
+		$this->lifecycle           = $lifecycle;
+		$this->telemetry           = $telemetry;
+		$this->consent             = $consent;
+		$this->consent_notice      = $consent_notice;
+		$this->survey              = $survey;
+		$this->deactivation_survey = $deactivation_survey;
+		$this->announcements       = $announcements;
+		$this->announcement_notices = $announcement_notices;
 	}
 
 	/**
@@ -118,5 +140,53 @@ final class Plugin {
 	 */
 	public function consent_notice() {
 		return $this->consent_notice;
+	}
+
+	/**
+	 * The uninstall survey's client — questions, local validation and the
+	 * one-shot submission. Rarely needed directly; the modal drives it.
+	 *
+	 * @return Survey|null
+	 */
+	public function survey() {
+		return $this->survey;
+	}
+
+	/**
+	 * The deactivation modal. Nothing to call for the normal case — it
+	 * wires its own hooks — but this is where a plugin sets the name shown
+	 * in the prompt if the SDK could not read it from the file header:
+	 *
+	 *     $sdk->deactivation_survey()->set_product_name( 'Acme Bookings' );
+	 *
+	 * @return DeactivationSurvey|null
+	 */
+	public function deactivation_survey() {
+		return $this->deactivation_survey;
+	}
+
+	/**
+	 * The announcement cache. Read it to render the messages yourself
+	 * instead of using the built-in notices:
+	 *
+	 *     foreach ( $sdk->announcements()->visible() as $announcement ) { … }
+	 *
+	 * @return Announcements|null
+	 */
+	public function announcements() {
+		return $this->announcements;
+	}
+
+	/**
+	 * The notices, which print NOWHERE until you say where — an
+	 * announcement from your product has no business on another plugin's
+	 * screen:
+	 *
+	 *     $sdk->announcement_notices()->render_on_screen( 'settings_page_acme' );
+	 *
+	 * @return AnnouncementNotices|null
+	 */
+	public function announcement_notices() {
+		return $this->announcement_notices;
 	}
 }
