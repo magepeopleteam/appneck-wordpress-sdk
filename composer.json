@@ -22,5 +22,9 @@
     "config": {
         "sort-packages": true
     },
+    "scripts": {
+        "test": "phpunit",
+        "test:integration": "phpunit -c phpunit-integration.xml"
+    },
     "minimum-stability": "stable"
 }

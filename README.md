@@ -1,18 +1,177 @@
 # Appneck SDK for WordPress plugins
 
 The client library a plugin embeds to talk to Appneck: signed telemetry, consent,
-uninstall surveys and announcements.
-
-**S4.1 (foundation)** ships the version-safe loader, the signed HTTP client,
-credential storage and error handling. **S4.2 (lifecycle)** adds registration on
-activation and status updates on deactivate/uninstall. **S4.3 (telemetry)** adds
-the local queue, `track()`, and batched sending on a schedule. **S4.4 (consent)**
-adds the site owner's prompt and the accept/reject/change flow. **S4.5 (survey)**
-adds the deactivation survey, and **S4.6 (announcements)** the messages you send
-to your installations. That is the whole SDK surface — every endpoint in the zone
-now has a helper.
+uninstall surveys and announcements. This is the whole SDK surface — every
+endpoint in the `/sdk/v1/*` zone has a client-side helper: registration and
+lifecycle, a local event queue with `track()`/`track_error()`, the consent
+prompt, the deactivation survey, and announcement fetch/display.
 
 Requires PHP 7.2+. No runtime dependencies.
+
+*(If you're working inside the Appneck monorepo rather than consuming this as
+a distributed package: this was built in stages, tracked in
+`docs/sdk-roadmap.md` §S4. This guide doesn't follow that phase order; it
+follows the order you'll actually touch these pieces in as a plugin author.)*
+
+## Contents
+
+- [Quickstart](#quickstart) — under 10 minutes, from nothing to a real event on your dashboard
+- [Installing it in a plugin](#installing-it-in-a-plugin) — bundled vs. Composer, in full
+- [Version safety](#version-safety-why-the-loader-exists)
+- [It will not take down the host site](#it-will-not-take-down-the-host-site) — error handling
+- [Lifecycle](#lifecycle) — activation, deactivation, uninstall.php
+- [Telemetry](#telemetry) — `track()`, custom events, the heartbeat
+- [Consent](#consent) — what's automatic, what you configure, what not to do
+- [Deactivation survey](#deactivation-survey) — configured in the Org Panel, not code
+- [Announcements](#announcements) — same: authored in the Org Panel, not code
+- [Signing](#signing)
+- [Storage](#storage)
+- [Filters reference](#filters-reference) — every customization hook this SDK exposes
+- [Troubleshooting](#troubleshooting)
+- [Known limitations](#known-limitations)
+- [Tests](#tests)
+
+---
+
+## Quickstart
+
+The minimal path to a plugin that registers itself and reports a real event,
+start to finish. You'll need a product API key and secret from your Appneck
+Org Panel (Product → API Keys) before you start.
+
+### 1. Install the SDK
+
+**Composer** (if your plugin can assume it):
+
+```bash
+composer require appneck/wordpress-sdk
+```
+
+**Bundled** (no Composer — copy this package's directory into your plugin,
+conventionally at `vendor/appneck-sdk/`). Either way, see
+[Installing it in a plugin](#installing-it-in-a-plugin) below before you ship —
+there's one detail (the version-safe loader) that matters even if you only
+ever read this Quickstart.
+
+### 2. Wire it into your plugin's main file
+
+```php
+<?php
+/**
+ * Plugin Name: Acme Bookings
+ */
+
+// Bundled only — Composer's autoloader already resolves these classes,
+// so skip this require if you installed via Composer.
+require_once __DIR__ . '/vendor/appneck-sdk/appneck-sdk.php';
+
+// Force the loader to resolve NOW rather than waiting for `plugins_loaded`
+// — required here, not optional. See the callout right below this snippet.
+appneck_sdk_load_latest();
+
+$GLOBALS['acme_sdk'] = \Appneck\Sdk\Sdk::bootstrap(
+	'pk_your_product_key',
+	'sk_your_product_secret',
+	'https://app.appneck.com',
+	__FILE__          // your plugin's main file
+);
+```
+
+`Sdk::bootstrap()` wires everything by itself — activation, deactivation, the
+registration cron, the consent prompt, the deactivation survey, announcements.
+There is nothing else to call for any of those.
+
+**Call this at your plugin's top level, not inside `add_action('plugins_loaded', ...)`
+— confirmed by running this exact pattern against real WordPress core, not
+assumed.** `register_activation_hook()`/`register_deactivation_hook()` (which
+`bootstrap()` calls on your behalf) only work when WordPress sees them during
+your plugin file's own synchronous top-level execution: WordPress runs your
+plugin file directly, as a one-off include, for exactly that purpose, and
+that happens *before* `plugins_loaded` fires for that same request — deferring
+the call means the registration happens too late to catch that request's
+activation/deactivation event, silently. Verified two ways: activating a
+plugin with `bootstrap()` deferred to `plugins_loaded` created no local event
+table and scheduled no registration cron event at all — `on_activate()`
+never ran; moving the same call to the top level fixed both immediately, no
+other change.
+
+This does cost something: `appneck_sdk_load_latest()` forces this copy to
+load now rather than waiting for every bundled copy on the site to register
+first (see [Version safety](#version-safety-why-the-loader-exists)), so in
+the rare case where an *older* copy of this plugin loads before a *newer*
+copy bundled by a different, not-yet-loaded plugin, the older one can win
+for this one request. In practice this only matters for the activation/
+deactivation request itself — by then, every other already-active plugin's
+own top-level code (and version registration) has already run earlier in
+that same request, so the race is narrow: two brand-new SDK-bundling plugins
+being activated for the very first time in the same request. Normal page
+loads are unaffected either way, since `bootstrap()`'s other behaviour
+(telemetry, consent, announcements) doesn't depend on this timing — only the
+activation/deactivation hooks do.
+
+### 3. Add `uninstall.php`
+
+At your plugin's root, next to the main file — **not** inside a subdirectory,
+WordPress only looks for it at the top level:
+
+```php
+<?php
+defined( 'WP_UNINSTALL_PLUGIN' ) || exit;
+
+require_once __DIR__ . '/vendor/appneck-sdk/appneck-sdk.php';
+
+\Appneck\Sdk\Sdk::uninstall(
+	'pk_your_product_key',
+	'sk_your_product_secret',
+	'https://app.appneck.com'
+);
+```
+
+Skipping this isn't a silent gap — see [Lifecycle](#lifecycle) for exactly why
+`register_uninstall_hook` doesn't work as a substitute.
+
+### 4. Activate the plugin, and confirm registration happened
+
+Activation itself makes **no** network call — it schedules the real
+registration for the next page load (see [Lifecycle](#lifecycle) for why). So:
+
+1. Load any `wp-admin` page once (this is what fires WP-Cron in the normal
+   case), or force it immediately with WP-CLI:
+   ```bash
+   wp cron event run appneck_sdk_register
+   ```
+2. Check your Appneck Org Panel → your product → Installations. Your site
+   should appear there, status `active`, within seconds.
+
+If it doesn't show up, pass a `Logger` (see
+[Troubleshooting](#troubleshooting)) and check what it says — registration
+failures are logged, not swallowed.
+
+### 5. Send a real event
+
+```php
+$GLOBALS['acme_sdk']->track( 'plugin_activated', array( 'version' => '1.0.0' ) );
+```
+
+`track()` never makes an HTTP call — it queues locally and sends on the next
+15-minute heartbeat. To see it arrive immediately instead of waiting:
+
+```php
+$GLOBALS['acme_sdk']->flush();
+```
+
+**One real thing to know before you go looking for it on the dashboard:** a
+brand-new installation starts with consent `pending`. Until the site owner
+answers the automatic "Allow usage data?" prompt (or you answer it yourself,
+while testing), the server correctly **refuses telemetry with a 403** — this
+is the fail-closed consent gate working as designed, not a bug in your
+integration. Click **Allow usage data** on your own test site, then `flush()`
+again, and the event will arrive. See [Consent](#consent) for the full
+behaviour.
+
+That's the whole loop: install → bootstrap → activate → registers itself →
+`track()` → shows up. Everything past this point is what each piece does in
+more detail, and how to customize it.
 
 ---
 
@@ -36,7 +195,8 @@ arranges for exactly one copy on the site — the newest — to load its classes
 `plugins_loaded` priority 0. See "Version safety" below for why that matters.
 
 Because the SDK is loaded on `plugins_loaded` priority 0, use it from priority 1
-or later:
+or later — **this deferred form is only correct for `Sdk::client()`**, which
+has no activation/deactivation hooks to register:
 
 ```php
 add_action( 'plugins_loaded', function () {
@@ -52,6 +212,16 @@ If you genuinely need the SDK earlier, call `appneck_sdk_load_latest()` yourself
 It is idempotent and safe — but copies belonging to plugins that have not loaded
 yet cannot have registered, so an older copy may win. That is the trade-off, and
 it is why the default waits.
+
+**`Sdk::bootstrap()` is the exception, and needs the SDK earlier, always** —
+see the Quickstart's step 2 and the callout right after it. `bootstrap()`
+calls `register_activation_hook()`/`register_deactivation_hook()` on your
+behalf, and WordPress only honours those calls during your plugin file's own
+synchronous top-level execution — deferring `bootstrap()` to `plugins_loaded`
+silently breaks activation and deactivation. This was found by running the
+deferred pattern against real WordPress core, not assumed: no local event
+table was created and no registration cron was scheduled on activation until
+the call moved to the top level.
 
 ### 2. Composer
 
@@ -131,21 +301,23 @@ is not ours to decide.
 
 ---
 
-## Lifecycle (S4.2)
+## Lifecycle
 
 ```php
-add_action( 'plugins_loaded', function () {
-    \Appneck\Sdk\Sdk::bootstrap(
-        'pk_your_product_key',
-        'sk_your_product_secret',
-        'https://app.appneck.com',
-        __FILE__          // your plugin's main file
-    );
-}, 20 );
+appneck_sdk_load_latest(); // required here — see the Quickstart's step 2
+
+\Appneck\Sdk\Sdk::bootstrap(
+    'pk_your_product_key',
+    'sk_your_product_secret',
+    'https://app.appneck.com',
+    __FILE__          // your plugin's main file
+);
 ```
 
 That wires activation, deactivation, the registration cron and the
-admin_init fallback. For uninstall, add `uninstall.php` to your plugin root:
+admin_init fallback — **but only if this call happens at your plugin's top
+level**, not inside `add_action('plugins_loaded', ...)`. For uninstall, add
+`uninstall.php` to your plugin root:
 
 ```php
 <?php
@@ -223,7 +395,7 @@ reporting `deactivated`. The server's lost-installation detection
 
 ---
 
-## Telemetry (S4.3)
+## Telemetry
 
 ```php
 $sdk = \Appneck\Sdk\Sdk::bootstrap( 'pk_…', 'sk_…', 'https://app.appneck.com', __FILE__ );
@@ -302,7 +474,7 @@ never leave it.
 
 ---
 
-## Consent (S4.4)
+## Consent
 
 Nothing extra to wire: `Sdk::bootstrap()` registers the prompt, the
 `admin-post.php` handler and the retry hooks. Two things are worth doing
@@ -397,7 +569,7 @@ add_filter( 'appneck_sdk_reprompt_on_policy_change', fn() => false );
 ### Reading it yourself
 
 ```php
-$sdk->consent()->is_accepted();   // gate your own optional features
+$sdk->consent()->is_accepted();   // whether Appneck may collect telemetry
 $sdk->consent()->status();        // pending|accepted|rejected
 $sdk->consent()->decided_at();
 $sdk->consent()->is_sync_pending();
@@ -410,9 +582,38 @@ because `track()` reads it on page loads where the credentials are never
 touched. `Sdk::uninstall()` deletes it; the server keeps the permanent
 `consent_events` history regardless.
 
+### What this consent is *not*
+
+`is_accepted()` answers exactly one question: **may Appneck collect
+telemetry for this installation?** It is scoped to that, and only that.
+
+**Do not** wire it up as your plugin's general-purpose consent flag —
+don't gate your own analytics, your own third-party integrations, GDPR
+cookie banners, marketing opt-ins, or any other feature that has nothing
+to do with Appneck's own data collection on this signal. Two independent
+reasons this matters, not just style:
+
+- **The site owner didn't agree to that.** They answered one specific
+  question ("share usage data with Appneck?"). Reusing that answer to
+  silently gate something unrelated means acting on a consent they never
+  gave, which is the kind of scope-creep that erodes the reason consent
+  prompts are trustworthy at all.
+- **The two can legitimately diverge**, and code that conflates them will
+  behave wrong when they do. A site owner may reject Appneck telemetry
+  while still wanting your plugin's own opt-in email marketing, or the
+  reverse. If your plugin needs its own consent state for its own
+  purposes, build that as its own flag — it is a few lines of
+  `wp_options`, not a reason to overload this one.
+
 ---
 
-## Deactivation survey (S4.5)
+## Deactivation survey
+
+**Configured in your Appneck Org Panel (Product → Survey Questions), not in
+code.** This SDK does not author questions — it fetches whatever your
+organization has configured there, renders them in the deactivation modal,
+and submits the answers back. If you're looking for how to add or edit
+questions, that's an Org Panel task, not a code change in this plugin.
 
 Nothing to wire. `Sdk::bootstrap()` registers the modal, and if your product
 has no survey configured in Appneck, nothing appears at all.
@@ -491,11 +692,17 @@ from.
 
 ---
 
-## Announcements (S4.6)
+## Announcements
 
-Messages you publish in Appneck, shown to your installations. Fetching and
-caching is automatic; **where they display is up to you**, because an
-announcement from your product has no business on another plugin's screen:
+**Authored in your Appneck Org Panel (Product → Announcements), not in
+code.** Same relationship as the survey above: this SDK is a display client,
+not an authoring tool. To publish, schedule, or retract an announcement, do
+that in the Org Panel — the SDK's job starts at fetching what's published
+there.
+
+Fetching and caching is automatic; **where they display is up to you**,
+because an announcement from your product has no business on another
+plugin's screen:
 
 ```php
 // once, at bootstrap — printed only on that one screen
@@ -618,6 +825,158 @@ different persistence.
 
 ---
 
+## Filters reference
+
+Every customization point this SDK exposes. This is the complete list —
+verified by grepping the package for every `apply_filters()` call, not
+assembled from memory, so if a filter you were expecting isn't here, it
+doesn't exist yet.
+
+| Filter | Default | Arguments | What it controls |
+|---|---|---|---|
+| `appneck_sdk_flush_interval` | `900` (15 minutes, in seconds) | `$interval, $api_key` | How often the heartbeat cron flushes the local event queue. Floored at 60 seconds regardless of what the filter returns — a filter returning something silly cannot turn into a request storm on the site owner's server. |
+| `appneck_sdk_privacy_policy_version` | `'1.0'` | `$version, $api_key` | The privacy policy version recorded on every consent decision. Set this to your own version string so a later change can trigger a re-prompt (see below). |
+| `appneck_sdk_reprompt_on_policy_change` | `true` | `$reprompt, $api_key` | Whether bumping the privacy policy version re-shows the prompt to a site that already **accepted**. Set to `false` if you're correcting a typo in the version string rather than actually changing the policy — you don't want a re-prompt for that. A **rejected** decision is never re-prompted by this filter either way. |
+
+All three receive the product's `$api_key` as a second argument, so a
+plugin bundling more than one Appneck-instrumented product can tell them
+apart inside the same callback:
+
+```php
+add_filter( 'appneck_sdk_flush_interval', function ( $interval, $api_key ) {
+	return 'pk_your_product_key' === $api_key ? 30 * MINUTE_IN_SECONDS : $interval;
+}, 10, 2 );
+```
+
+There are no `do_action()` hooks fired outward by this package — nothing to
+subscribe to, only these three values to override.
+
+---
+
+## Troubleshooting
+
+**Multiple plugins bundle different SDK versions, and I'm not sure which one
+is actually running.**
+
+```php
+echo \Appneck\Sdk\Sdk::loaded_version();
+```
+
+Exactly one copy loads per site — the highest version registered by any
+plugin present, per [Version safety](#version-safety-why-the-loader-exists).
+This tells you which one won. If your own copy is newer than what's loaded
+and you need to confirm your code is even the code running, this is the
+first thing to check — a bug that looks like "my change didn't take effect"
+is often "a different plugin's older bundled copy won."
+
+**Telemetry isn't arriving on the dashboard.**
+
+Logging is opt-in (see [It will not take down the host site](#it-will-not-take-down-the-host-site)) — the default `Logger` writes nothing, so a
+silently-failing SDK call looks identical to a working one until you turn
+logging on:
+
+```php
+\Appneck\Sdk\Sdk::bootstrap(
+	'pk_...', 'sk_...', 'https://app.appneck.com', __FILE__,
+	null, null,
+	new \Appneck\Sdk\Logging\ErrorLogLogger( 'Acme Bookings' )
+);
+```
+
+Then check `wp-content/debug.log` (or wherever `error_log()` goes on that
+host). Once logging is on, work through these in order:
+
+1. **Is the installation registered?** `$sdk->is_registered()` — if false,
+   registration hasn't completed yet (see the Quickstart's step 4: it needs
+   a page load or `wp cron event run appneck_sdk_register` after
+   activation, since activation itself makes no network call).
+2. **Is consent `accepted`?** `$sdk->consent()->status()` — a fresh install
+   starts `pending`, and the server fails telemetry closed (403) until the
+   site owner answers the prompt. This is by far the most common reason a
+   brand-new integration "isn't sending anything": nothing is wrong, nobody
+   has clicked **Allow usage data** yet.
+3. **Is the log showing an actual error?** A 401 means the signature or API
+   key is wrong — double check you're using the *installation* secret path
+   correctly (see [Signing](#signing); the client never falls back to the
+   product secret once an installation secret exists, by design). A 429
+   means you're being rate-limited — the SDK already backs off on
+   `Retry-After` automatically, so this should self-resolve. A `5xx` or a
+   transport error is kept and retried on the next tick; nothing to do.
+
+**A request I expected to succeed came back `401 Invalid signature.`**
+
+The single most common cause is signing with the wrong secret for the
+route: `POST /sdk/v1/installations` (registration) signs with the
+*product* secret; every other endpoint signs with the *per-installation*
+secret the server issued at registration. If you're calling `Client`
+directly rather than through `Sdk::bootstrap()`/`Plugin`, make sure
+credentials are actually stored before the first non-registration call —
+`$sdk->is_registered()` tells you.
+
+**A registration attempt returns `409 An installation already exists for
+this site and product.`**
+
+Expected when a site's stored credentials are lost (backup restore, a
+`wp_options` row deleted by another tool) but the server still has a live
+Installation for that (site, product) pair. The SDK stops retrying on a
+`409` automatically rather than burning through its backoff schedule for
+nothing — see [Known limitations](#known-limitations) for the current,
+honest state of self-service recovery from this.
+
+---
+
+## Known limitations
+
+Stated plainly, the same way the rest of this project logs gaps — these are
+real, current edges, not hedging:
+
+- **No self-service recovery from lost credentials.** If a site's stored
+  `installation_id`/`installation_secret` are lost (a partial backup
+  restore, a plugin conflict clearing options, manual `wp_options` surgery)
+  while the server still has a live Installation for that site+product, the
+  SDK gets a clean `409` and correctly stops retrying — but there is no
+  client-side path back to a working state. Today, recovery requires an
+  Appneck operator resolving the conflict server-side and toggling the
+  installation's status, which resets the retry counter. A real
+  self-service recovery flow is deferred as its own future feature, not
+  forgotten.
+- **The production event queue's SQL is not covered by this package's own
+  test suite.** `TableEventQueue` uses `dbDelta` against a real `$wpdb` —
+  this package's test harness has PHP but no real WordPress/MySQL to run
+  it against, so only the in-memory `EventQueue` contract
+  (`ArrayEventQueue`) is exercised in tests, and the integration scripts
+  substitute it too. The schema, eviction-when-full, and delete-by-id logic
+  need one real pass on an actual WordPress install before you'd want to
+  lean on them at real scale. If you need a different persistence strategy
+  meanwhile, `Sdk::bootstrap()` accepts any `EventQueue` implementation.
+- **The deactivation survey modal's browser JS is untested.** No
+  browser/build-step test harness exists for this package, so only the
+  server side (the admin-ajax handler, the questions endpoint, submission)
+  has coverage. The riskiest untested part is the link-matcher that
+  intercepts the **Deactivate** click on the plugins screen — if a future
+  WordPress core release changes that screen's markup, the survey could
+  silently stop appearing (deactivation itself still works either way,
+  which is the safe direction, but you'd lose the feedback silently rather
+  than with an error).
+- **Multisite network-wide deactivation doesn't notify every subsite.**
+  Each subsite registers itself lazily and independently (see
+  [Lifecycle](#lifecycle)), which is deliberate and works well for
+  activation and normal use — but a **network-wide** deactivation fires
+  once and cannot feasibly loop every subsite to tell the server each one
+  went dark. Those subsites go quiet rather than reporting `deactivated`;
+  the server's own lost-installation detection is what eventually notices.
+- **PHP 7.2 minimum, tested primarily against modern PHP.** The version
+  floor is deliberate (WordPress's own broad hosting reality), but day-to-day
+  development and testing happens on current PHP — if you're deploying to a
+  genuinely old PHP 7.2 host, treat that combination as less exercised than
+  the rest.
+
+None of these block using the SDK — they're the honest state of what's
+solid versus what has an open edge, so you can decide what matters for your
+own deployment rather than finding out the hard way.
+
+---
+
 ## Tests
 
 ```bash
@@ -625,26 +984,76 @@ different persistence.
 docker compose run --rm --no-deps -v "$(pwd)/packages:/packages" \
   -w /packages/wordpress-sdk backend \
   /var/www/html/vendor/bin/phpunit --cache-directory /tmp/pu
-
-# live check against the running backend
-docker compose run --rm --no-deps -v "$(pwd)/packages:/packages" \
-  -w /packages/wordpress-sdk backend \
-  php tests/integration/live-check.php http://nginx <api_key> <product_secret> \
-     <installation_id> <installation_secret>
-
-# and the per-phase live checks, each registering its own throwaway site
-#   tests/integration/lifecycle-check.php  <base_url> <api_key> <product_secret>
-#   tests/integration/telemetry-check.php  <base_url> <api_key> <product_secret> [<domain>]
-#   tests/integration/consent-check.php    <base_url> <api_key> <product_secret> [<domain>]
-#   tests/integration/survey-check.php     <base_url> <api_key> <product_secret> \
-#                                          [<other_api_key> <other_secret>] [<domain>]
-#   tests/integration/announcements-check.php  <base_url> <api_key> <product_secret> \
-#                                          [<other_api_key> <other_secret>] [<domain>]
-#     (author the announcements in the Org Panel first — see the file header)
 ```
 
+Or, if you've run `composer install` inside `packages/wordpress-sdk` (its own
+`vendor/`, not this monorepo's): `composer test`.
+
 The unit suite runs with **no Composer autoloader and no WordPress**, on purpose:
-that is the environment a bundled copy actually runs in.
+that is the environment a bundled copy actually runs in. It never touches a
+network and needs nothing configured — this is what CI runs, and what
+`composer test` (no `:integration` suffix) always means.
 
 Style is **WordPress Coding Standards** (`phpcs.xml.dist`), not this monorepo's
 Pint/PSR-12 setup — see that file for the reasoning.
+
+### Integration tests
+
+A second suite (`tests/integration/`) runs the same classes above against a
+**real backend** instead of polyfills — the thing worth proving isn't "does
+this class behave correctly against a fake HTTP layer" but "does this
+client's signature actually verify, does this batch actually get accepted,
+does this consent decision actually persist." It's a separate PHPUnit
+config, `composer test:integration`, deliberately **not** part of the
+default `composer test`:
+
+```bash
+# from the repo root, with the dev stack up — packages/ isn't bind-mounted
+# into `backend` by default (see Known limitations), so mount it for this
+# one run the same way the plain unit-test command above does
+docker compose run --rm --no-deps -v "$(pwd)/packages:/packages" \
+  -e APPNECK_SDK_TEST_API_KEY=pk_... \
+  -e APPNECK_SDK_TEST_PRODUCT_SECRET=sk_... \
+  -e APPNECK_SDK_TEST_SECOND_API_KEY=pk_... \
+  -e APPNECK_SDK_TEST_SECOND_PRODUCT_SECRET=sk_... \
+  -e APPNECK_SDK_TEST_ORGANIZATION_ID=<uuid> \
+  -e APPNECK_SDK_TEST_PRODUCT_ID=<uuid> \
+  -w /packages/wordpress-sdk backend \
+  /var/www/html/vendor/bin/phpunit -c phpunit-integration.xml
+```
+
+`APPNECK_SDK_TEST_BASE_URL` defaults to `http://nginx`, the right hostname
+from *inside* this Docker network — that's why this runs through
+`docker compose run`/`exec` rather than from the host.
+
+Every test **skips cleanly** — not a failure — when it can't run, so this
+never breaks `composer test` for a developer without any of this configured;
+a plain `composer test:integration` with nothing set reports 7 skipped, 0
+failed. Two independent gates, both checked in `setUp()`:
+
+| Env var | Default | What it's for |
+|---|---|---|
+| `APPNECK_SDK_TEST_BASE_URL` | `http://nginx` | The backend to test against. The default matches this monorepo's own Docker network. |
+| `APPNECK_SDK_TEST_API_KEY` / `APPNECK_SDK_TEST_PRODUCT_SECRET` | *(none — required)* | A real product's SDK credentials. Not set → every test skips before touching the network. |
+| `APPNECK_SDK_TEST_SECOND_API_KEY` / `APPNECK_SDK_TEST_SECOND_PRODUCT_SECRET` | *(none)* | A **second** product's SDK credentials, with nothing configured on it — used for the cross-product-isolation and zero-announcements/zero-survey cases. Not set → those specific assertions report `markTestIncomplete` rather than being silently skipped whole-test, so a missing second product doesn't quietly hide a real gap. |
+| `APPNECK_SDK_TEST_ORGANIZATION_ID` / `APPNECK_SDK_TEST_PRODUCT_ID` | *(none)* | The organization/product ids matching the primary API key above. Needed only by the two tests that author real fixtures through the Org Panel API (survey questions, announcements) — not set → those two tests skip, the other five still run. |
+| `APPNECK_SDK_TEST_ORG_EMAIL` / `APPNECK_SDK_TEST_ORG_PASSWORD` | `demo@example.com` / `password` | A real dashboard user, logged in via `POST /app/v1/auth/login` to get a bearer token for authoring those same fixtures. The default is this monorepo's own seeded dev fixture (`DemoSeeder` prints it to the console as seeded, not a secret) — override for anything else. |
+
+**One environment choice, not a per-run manual step:** the primary product
+(`APPNECK_SDK_TEST_API_KEY`) should be a product **dedicated to this test
+suite** — the survey and announcements tests assert exact counts (`exactly
+5 questions`, `exactly the 2 currently-visible announcements`) that would
+break against a product carrying real demo/production data alongside the
+suite's own fixtures. The second product should stay permanently empty.
+Pick these once when setting up an environment; nothing about running the
+suite requires touching the Org Panel by hand.
+
+**What used to be manual and no longer is:** every fixture these tests need
+— registered installations, consent decisions, survey questions,
+announcements — is created in `setUp()` through the real API and removed in
+`tearDown()`. The old `tests/integration/*-check.php` scripts these classes
+were converted from documented standing preconditions ("author 5
+announcements in the Org Panel first," in one case); none of that survived
+the conversion. Each test also uses a freshly randomized site domain
+(`random_domain()`), so repeated runs — including two CI jobs racing — never
+collide on the server's one-installation-per-(site,product) constraint.
