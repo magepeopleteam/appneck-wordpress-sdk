@@ -916,12 +916,15 @@ credentials are actually stored before the first non-registration call —
 **A registration attempt returns `409 An installation already exists for
 this site and product.`**
 
-Expected when a site's stored credentials are lost (backup restore, a
-`wp_options` row deleted by another tool) but the server still has a live
-Installation for that (site, product) pair. The SDK stops retrying on a
-`409` automatically rather than burning through its backoff schedule for
-nothing — see [Known limitations](#known-limitations) for the current,
-honest state of self-service recovery from this.
+A normal uninstall → reinstall on the same site self-heals automatically
+(journal §9.2b — see [Known limitations](#known-limitations)) as long as it
+happens within the reclaim grace window (15 minutes by default), so a `409`
+here usually means either that window closed, or the credentials were lost
+some other way (backup restore, a `wp_options` row deleted by another tool)
+without a clean uninstall ever happening — no reclaim token was ever issued
+either way. The SDK stops retrying on a `409` automatically rather than
+burning through its backoff schedule for nothing; see Known limitations for
+the current, honest state of recovery from this.
 
 ---
 
@@ -930,16 +933,22 @@ honest state of self-service recovery from this.
 Stated plainly, the same way the rest of this project logs gaps — these are
 real, current edges, not hedging:
 
-- **No self-service recovery from lost credentials.** If a site's stored
-  `installation_id`/`installation_secret` are lost (a partial backup
-  restore, a plugin conflict clearing options, manual `wp_options` surgery)
-  while the server still has a live Installation for that site+product, the
-  SDK gets a clean `409` and correctly stops retrying — but there is no
-  client-side path back to a working state. Today, recovery requires an
-  Appneck operator resolving the conflict server-side and toggling the
-  installation's status, which resets the retry counter. A real
-  self-service recovery flow is deferred as its own future feature, not
-  forgotten.
+- **Self-service recovery exists for the common case (a clean uninstall),
+  not for credential loss.** journal §9.2b: `uninstall.php` reporting
+  `removed` (signed with the real installation secret — proof of
+  possession) issues a short-lived, single-use reclaim token, which this
+  SDK stores and automatically presents on the next activation for the
+  same site. A normal uninstall → reinstall now just works — same
+  installation id, same history, no `409`, nothing for a plugin author to
+  do. What is still **not** self-service: a site whose credentials were
+  lost some other way (a partial backup restore, a plugin conflict
+  clearing options, manual `wp_options` surgery) never went through that
+  signed removal, so it never received a token, and still gets a clean
+  `409` with no client-side path back — recovery there still requires an
+  Appneck operator resolving the conflict server-side. The reclaim token
+  is also only valid for 15 minutes after removal by default
+  (`installation_reclaim_grace_minutes` server-side) — a reinstall well
+  after that window falls back to the same operator-recovery path.
 - **The production event queue's SQL is not covered by this package's own
   test suite.** `TableEventQueue` uses `dbDelta` against a real `$wpdb` —
   this package's test harness has PHP but no real WordPress/MySQL to run

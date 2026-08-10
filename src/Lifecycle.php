@@ -200,10 +200,21 @@ final class Lifecycle {
 		$this->record_attempt( $attempts + 1 );
 
 		$installation_id = $this->installation_id();
+		$payload         = $this->environment->collect();
+
+		// journal 9.2b: present only when on_uninstall() stored one on
+		// THIS site's last removal. Harmless to send when there is
+		// nothing to reclaim — the server only ever looks at it if a
+		// different id already occupies this (site, product) pair.
+		$reclaim_token = $this->get_option( 'reclaim_token', '' );
+
+		if ( is_string( $reclaim_token ) && '' !== $reclaim_token ) {
+			$payload['reclaim_token'] = $reclaim_token;
+		}
 
 		$response = $this->client->post(
 			'/sdk/v1/installations',
-			$this->environment->collect(),
+			$payload,
 			Client::MODE_BOOTSTRAP,
 			$installation_id
 		);
@@ -223,9 +234,20 @@ final class Lifecycle {
 		$secret = $response->get( 'installation_secret' );
 
 		if ( is_string( $secret ) && '' !== $secret ) {
-			// A fresh enrolment: the one and only time the server
-			// discloses this installation's secret (journal §9.2a).
-			$this->client->credentials()->save( $installation_id, $secret );
+			// journal 9.2b: a successful reclaim returns the EXISTING
+			// row's real id, which the server chose — not necessarily
+			// the id this request was sent under (a fresh enrolment
+			// mints its own; a reclaim keeps the original one and this
+			// client's freshly-generated id is discarded). Always defer
+			// to whatever id the response actually carries, falling back
+			// to the one sent only if the field is somehow absent.
+			$confirmed_id = $response->get( 'id' );
+			$confirmed_id = is_string( $confirmed_id ) && '' !== $confirmed_id ? $confirmed_id : $installation_id;
+
+			// A fresh enrolment or a reclaim: the one and only time the
+			// server discloses this installation's secret (journal §9.2a).
+			$this->client->credentials()->save( $confirmed_id, $secret );
+			$this->delete_option( 'reclaim_token' );
 		} elseif ( ! $already_registered ) {
 			// No secret, and none stored. The server knows this id but
 			// will never re-disclose its secret, so nothing here can ever
@@ -245,6 +267,7 @@ final class Lifecycle {
 
 		$this->clear_pending();
 		$this->forget_installation_id();
+		$this->delete_option( 'reclaim_token' );
 
 		// A previous 403 may have stopped telemetry because the
 		// installation was inactive. It is active again now, so lift that.
@@ -316,6 +339,21 @@ final class Lifecycle {
 		$this->unschedule();
 
 		$response = $this->report_status( 'removed' );
+
+		// journal 9.2b: that call, signed with the secret about to be
+		// discarded below, is exactly the proof of possession a reclaim
+		// needs. Its response carries a one-time token FOR THIS REASON —
+		// stored here, deliberately NOT among the options cleared just
+		// below, so it survives to the next activation's registration
+		// attempt on this same site. Consumed (or expired) server-side
+		// either way; kept locally only long enough to be offered once.
+		if ( null !== $response && $response->ok() ) {
+			$token = $response->get( 'reclaim_token' );
+
+			if ( is_string( $token ) && '' !== $token ) {
+				$this->update_option( 'reclaim_token', $token );
+			}
+		}
 
 		if ( null !== $this->telemetry ) {
 			// Uninstall means the plugin's data goes. Unsent events are
@@ -447,6 +485,10 @@ final class Lifecycle {
 		$this->delete_option( 'force' );
 		$this->delete_option( 'pending' );
 		$this->update_option( 'attempts', self::MAX_ATTEMPTS );
+		// journal 9.2b: reached on a 403 or 409 — if this attempt carried
+		// a reclaim token, the server has already rejected it (wrong,
+		// expired, or nothing to reclaim). Nothing left to do with it.
+		$this->delete_option( 'reclaim_token' );
 	}
 
 	public function attempts() {

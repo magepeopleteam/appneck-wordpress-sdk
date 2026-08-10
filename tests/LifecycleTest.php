@@ -48,13 +48,41 @@ class LifecycleTest extends TestCase {
 		return new Lifecycle( $client, null, new Environment() );
 	}
 
+	/**
+	 * Deliberately no fixed `id` field: a real server's response to a
+	 * NORMAL (non-reclaim) registration always echoes back the same id
+	 * the request was sent under, so the client falls back to the sent
+	 * id when the field is absent here — see
+	 * test_a_successful_registration_stores_the_credential_pair, which
+	 * asserts exactly that agreement. journal §9.2b's reclaim case, where
+	 * the response id deliberately DIFFERS from the sent id, has its own
+	 * fixture below (registration_reclaim_success()).
+	 */
 	private function registration_success( $secret = 'sk_issued_secret' ): Response {
 		return Response::from_http(
 			201,
 			array(),
 			json_encode(
 				array(
-					'id'                  => '019fb200-0000-7000-8000-dddddddddddd',
+					'status'              => 'active',
+					'installation_secret' => $secret,
+				)
+			)
+		);
+	}
+
+	/**
+	 * journal §9.2b: what the server actually returns on a successful
+	 * reclaim — a DIFFERENT id (the existing row's real one) than
+	 * whatever the client just generated and sent, plus a fresh secret.
+	 */
+	private function registration_reclaim_success( $reclaimed_id, $secret = 'sk_reclaimed_secret' ): Response {
+		return Response::from_http(
+			200,
+			array(),
+			json_encode(
+				array(
+					'id'                  => $reclaimed_id,
 					'status'              => 'active',
 					'installation_secret' => $secret,
 				)
@@ -422,6 +450,114 @@ class LifecycleTest extends TestCase {
 		$lifecycle->on_uninstall();
 
 		$this->assertFalse( ( new WpOptionsCredentialStore( self::API_KEY ) )->has_credentials() );
+	}
+
+	// -----------------------------------------------------------------
+	// journal §9.2b — installation reclaim
+	// -----------------------------------------------------------------
+
+	/**
+	 * The exact S5.1 scenario end to end, client-side: uninstall (real
+	 * removal call, real token captured from its response) then a later
+	 * activation on the same site sends that stored token, and the
+	 * client adopts whatever id the server's reclaim response actually
+	 * returns — NOT the fresh id it locally generated and sent.
+	 */
+	public function test_a_stored_reclaim_token_is_sent_on_the_next_registration_and_the_returned_id_is_adopted(): void {
+		$this->transport->queue( $this->registration_success() );
+		$lifecycle = $this->lifecycle();
+		$lifecycle->ensure_registered();
+
+		$original_id = ( new WpOptionsCredentialStore( self::API_KEY ) )->get_installation_id();
+
+		$this->transport->queue(
+			Response::from_http( 200, array(), json_encode( array( 'status' => 'removed', 'reclaim_token' => 'rt_test_token_value' ) ) )
+		);
+		$lifecycle->on_uninstall();
+
+		$this->assertFalse( ( new WpOptionsCredentialStore( self::API_KEY ) )->has_credentials() );
+
+		// A later activation on the same site: a fresh Lifecycle, exactly
+		// as a real reinstall would construct one, sharing only the
+		// wp_options this test's polyfill backs.
+		$reinstalled = $this->lifecycle();
+		$this->transport->queue( $this->registration_reclaim_success( $original_id, 'sk_reclaimed_secret' ) );
+		$reinstalled->on_activate();
+		$reinstalled->ensure_registered();
+
+		$sent = $this->transport->last_request();
+		$this->assertSame( 'rt_test_token_value', json_decode( $sent['body'], true )['reclaim_token'] );
+
+		// The freshly-generated id that was SENT must differ from the
+		// original — this is a genuinely new local enrolment attempt.
+		$this->assertNotSame( $original_id, $sent['headers']['X-Installation-Id'] );
+
+		// But what's STORED afterward is the id the server actually
+		// confirmed — the original row, reclaimed — not the one just sent.
+		$store = new WpOptionsCredentialStore( self::API_KEY );
+		$this->assertSame( $original_id, $store->get_installation_id() );
+		$this->assertSame( 'sk_reclaimed_secret', $store->get_installation_secret() );
+	}
+
+	/** No prior removal on this site — nothing stored, nothing sent. */
+	public function test_no_reclaim_token_is_sent_when_none_was_ever_stored(): void {
+		$this->transport->queue( $this->registration_success() );
+		$lifecycle = $this->lifecycle();
+		$lifecycle->ensure_registered();
+
+		$sent = $this->transport->last_request();
+		$this->assertArrayNotHasKey( 'reclaim_token', json_decode( $sent['body'], true ) );
+	}
+
+	/**
+	 * A normal (non-reclaim) registration response never includes an
+	 * `id` field that differs from what was sent — but even so, the
+	 * client's fallback to the sent id when the field is entirely absent
+	 * must keep working, since real servers may not always echo it.
+	 */
+	public function test_registration_without_a_response_id_falls_back_to_the_sent_id(): void {
+		$this->transport->queue( $this->registration_success() );
+		$lifecycle = $this->lifecycle();
+		$lifecycle->ensure_registered();
+
+		$sent  = $this->transport->last_request();
+		$store = new WpOptionsCredentialStore( self::API_KEY );
+		$this->assertSame( $sent['headers']['X-Installation-Id'], $store->get_installation_id() );
+	}
+
+	/**
+	 * A registration that fails outright (409: no valid reclaim, or none
+	 * offered) must not silently drop the stored token — it may still be
+	 * valid for a retry within the same grace window, and the SDK cannot
+	 * tell from a bare failure whether the token itself was the problem.
+	 * Only a PERMANENT failure (403/409, via give_up()) or a SUCCESSFUL
+	 * registration consumes it.
+	 */
+	public function test_a_409_during_reclaim_clears_the_stored_token(): void {
+		$this->transport->queue( $this->registration_success() );
+		$lifecycle = $this->lifecycle();
+		$lifecycle->ensure_registered();
+
+		$this->transport->queue(
+			Response::from_http( 200, array(), json_encode( array( 'status' => 'removed', 'reclaim_token' => 'rt_will_be_rejected' ) ) )
+		);
+		$lifecycle->on_uninstall();
+
+		$reinstalled = $this->lifecycle();
+		$this->transport->queue( Response::from_http( 409, array(), '{"message":"An installation already exists for this site and product."}' ) );
+		$reinstalled->on_activate();
+		$reinstalled->ensure_registered();
+
+		// 409 is permanent — give_up() runs, and the now-rejected token
+		// is cleared rather than offered again on a future independent
+		// activation attempt. Reactivating (as the class doc says) resets
+		// the attempt counter give_up() maxed out, so this is a genuinely
+		// new attempt, not a blocked retry of the same one.
+		$reinstalled->on_activate();
+		$this->transport->queue( $this->registration_success() );
+		$reinstalled->ensure_registered();
+		$second_sent = $this->transport->last_request();
+		$this->assertArrayNotHasKey( 'reclaim_token', json_decode( $second_sent['body'], true ) );
 	}
 
 	// -----------------------------------------------------------------
