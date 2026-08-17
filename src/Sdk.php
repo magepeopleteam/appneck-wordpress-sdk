@@ -18,7 +18,7 @@ use Appneck\Sdk\Storage\WpOptionsCredentialStore;
  * Everything else in this package is constructible by hand for testing
  * and for callers with unusual needs, but the intended use is:
  *
- *     $client = \Appneck\Sdk\Sdk::client( 'pk_...', 'sk_...', 'https://app.appneck.com' );
+ *     $client = \Appneck\Sdk\Sdk::client( 'pk_...', 'sk_...', 'https://appneck.com' );
  *
  * which wires the WordPress options store and the WordPress HTTP
  * transport for you.
@@ -147,7 +147,7 @@ final class Sdk {
 	 *
 	 *     defined( 'WP_UNINSTALL_PLUGIN' ) || exit;
 	 *     require_once __DIR__ . '/vendor/appneck-sdk/appneck-sdk.php';
-	 *     \Appneck\Sdk\Sdk::uninstall( 'pk_...', 'sk_...', 'https://app.appneck.com' );
+	 *     \Appneck\Sdk\Sdk::uninstall( 'pk_...', 'sk_...', 'https://appneck.com' );
 	 *
 	 * Returns null when this site never completed registration — there is
 	 * nothing on the server to mark removed, and that is not an error.

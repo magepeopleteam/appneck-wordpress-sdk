@@ -31,7 +31,7 @@ final class Config {
 	/**
 	 * @param string $api_key        The product's public API key (pk_...).
 	 * @param string $product_secret The bootstrap signing secret (sk_...).
-	 * @param string $base_url       API root, e.g. https://app.appneck.com.
+	 * @param string $base_url       API root, e.g. https://appneck.com.
 	 */
 	public function __construct( $api_key, $product_secret, $base_url ) {
 		$this->api_key        = (string) $api_key;

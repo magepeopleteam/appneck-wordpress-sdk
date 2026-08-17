@@ -72,7 +72,7 @@ appneck_sdk_load_latest();
 $GLOBALS['acme_sdk'] = \Appneck\Sdk\Sdk::bootstrap(
 	'pk_your_product_key',
 	'sk_your_product_secret',
-	'https://app.appneck.com',
+	'https://appneck.com',
 	__FILE__          // your plugin's main file
 );
 ```
@@ -123,7 +123,7 @@ require_once __DIR__ . '/vendor/appneck-sdk/appneck-sdk.php';
 \Appneck\Sdk\Sdk::uninstall(
 	'pk_your_product_key',
 	'sk_your_product_secret',
-	'https://app.appneck.com'
+	'https://appneck.com'
 );
 ```
 
@@ -203,7 +203,7 @@ add_action( 'plugins_loaded', function () {
     $client = \Appneck\Sdk\Sdk::client(
         'pk_your_product_key',
         'sk_your_product_secret',
-        'https://app.appneck.com'
+        'https://appneck.com'
     );
 }, 20 );
 ```
@@ -309,7 +309,7 @@ appneck_sdk_load_latest(); // required here — see the Quickstart's step 2
 \Appneck\Sdk\Sdk::bootstrap(
     'pk_your_product_key',
     'sk_your_product_secret',
-    'https://app.appneck.com',
+    'https://appneck.com',
     __FILE__          // your plugin's main file
 );
 ```
@@ -325,7 +325,7 @@ defined( 'WP_UNINSTALL_PLUGIN' ) || exit;
 
 require_once __DIR__ . '/vendor/appneck-sdk/appneck-sdk.php';
 
-\Appneck\Sdk\Sdk::uninstall( 'pk_...', 'sk_...', 'https://app.appneck.com' );
+\Appneck\Sdk\Sdk::uninstall( 'pk_...', 'sk_...', 'https://appneck.com' );
 ```
 
 `uninstall.php` rather than `register_uninstall_hook`, and the reason
@@ -398,7 +398,7 @@ reporting `deactivated`. The server's lost-installation detection
 ## Telemetry
 
 ```php
-$sdk = \Appneck\Sdk\Sdk::bootstrap( 'pk_…', 'sk_…', 'https://app.appneck.com', __FILE__ );
+$sdk = \Appneck\Sdk\Sdk::bootstrap( 'pk_…', 'sk_…', 'https://appneck.com', __FILE__ );
 
 $sdk->track( 'booking_created', array( 'source' => 'checkout', 'total' => 42 ) );
 $sdk->track_error( 'Payment gateway timeout', array( 'gateway' => 'stripe' ) );
@@ -877,7 +877,7 @@ logging on:
 
 ```php
 \Appneck\Sdk\Sdk::bootstrap(
-	'pk_...', 'sk_...', 'https://app.appneck.com', __FILE__,
+	'pk_...', 'sk_...', 'https://appneck.com', __FILE__,
 	null, null,
 	new \Appneck\Sdk\Logging\ErrorLogLogger( 'Acme Bookings' )
 );
