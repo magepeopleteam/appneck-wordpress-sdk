@@ -47,11 +47,20 @@ Org Panel (Product → API Keys) before you start.
 composer require appneck/wordpress-sdk
 ```
 
-**Bundled** (no Composer — copy this package's directory into your plugin,
-conventionally at `vendor/appneck-sdk/`). Either way, see
-[Installing it in a plugin](#installing-it-in-a-plugin) below before you ship —
-there's one detail (the version-safe loader) that matters even if you only
-ever read this Quickstart.
+**Bundled** (no Composer — download the SDK and copy its directory into your
+plugin, conventionally at `vendor/appneck-sdk/`):
+
+```bash
+git clone https://github.com/magepeopleteam/appneck-wordpress-sdk.git vendor/appneck-sdk
+```
+
+Or download a zip of a specific tag/release from
+[github.com/magepeopleteam/appneck-wordpress-sdk](https://github.com/magepeopleteam/appneck-wordpress-sdk)
+if you'd rather not vendor a `.git` directory into your plugin.
+
+Either way, see [Installing it in a plugin](#installing-it-in-a-plugin) below
+before you ship — there's one detail (the version-safe loader) that matters
+even if you only ever read this Quickstart.
 
 ### 2. Wire it into your plugin's main file
 
@@ -183,8 +192,10 @@ work identically without it.
 
 ### 1. Bundled (no Composer)
 
-Copy this directory into your plugin, and require the loader — **not** any file
-in `src/`:
+Get the SDK from its standalone repository —
+[github.com/magepeopleteam/appneck-wordpress-sdk](https://github.com/magepeopleteam/appneck-wordpress-sdk)
+(`git clone` it, or download a release zip) — copy its directory into your
+plugin, and require the loader — **not** any file in `src/`:
 
 ```php
 require_once __DIR__ . '/vendor/appneck-sdk/appneck-sdk.php';
