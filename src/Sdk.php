@@ -77,17 +77,19 @@ final class Sdk {
 	) {
 		$client = self::client( $api_key, $product_secret, $base_url, $credentials, $transport, $logger );
 
-		$queue     = null !== $queue ? $queue : new TableEventQueue( $api_key );
-		$telemetry = new Telemetry( $client, $queue, $logger );
+		$queue       = null !== $queue ? $queue : new TableEventQueue( $api_key );
+		$environment = new Environment( $plugin_file );
+		// Telemetry reads the site's plugin/theme inventory off this same
+		// instance for the heartbeat — see Telemetry::environment_payload.
+		$telemetry = new Telemetry( $client, $queue, $logger, null, $environment );
 		$consent   = new Consent( $client, $telemetry, $logger );
-		$lifecycle = new Lifecycle( $client, $plugin_file, null, $telemetry );
+		$lifecycle = new Lifecycle( $client, $plugin_file, $environment, $telemetry );
 
 		// Mutual: Telemetry asks Consent whether the owner refused, Consent
 		// acts on Telemetry the moment they answer. Wired here rather than
 		// in either constructor so both stay independently constructible.
 		$telemetry->set_consent( $consent );
 
-		$environment  = new Environment( $plugin_file );
 		$plugin_name  = $environment->plugin_name();
 		$notice       = new ConsentNotice(
 			$consent,

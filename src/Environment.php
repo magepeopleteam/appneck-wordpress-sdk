@@ -314,6 +314,97 @@ final class Environment {
 	}
 
 	/**
+	 * The site's plugin and theme inventory — what is installed, what is
+	 * switched on, and which theme is running.
+	 *
+	 * Deliberately NOT part of collect(): that is the registration
+	 * payload, whose fields all map to a column on `installations`. This
+	 * one is an unbounded, changing list that the server stores as its own
+	 * snapshot row (`installation_environments`), and it rides the
+	 * heartbeat rather than registration because it is a fact that keeps
+	 * changing after the plugin is first activated.
+	 *
+	 * Same paranoia as the rest of this class, and it earns it here more
+	 * than anywhere: get_plugins() lives in wp-admin/includes/plugin.php,
+	 * which is NOT loaded on a front-end request — and a heartbeat fires
+	 * from WP-Cron, which IS a front-end request. So the file is required
+	 * defensively rather than assumed, and every failure returns null so a
+	 * site whose inventory cannot be read still sends its heartbeat.
+	 *
+	 * @return array{plugins: array<int, array<string, mixed>>, theme: array<string, mixed>}|null
+	 */
+	public function plugin_inventory() {
+		if ( ! function_exists( 'get_option' ) || ! function_exists( 'wp_get_theme' ) ) {
+			return null;
+		}
+
+		if ( ! function_exists( 'get_plugins' ) ) {
+			if ( ! defined( 'ABSPATH' ) || ! is_readable( ABSPATH . 'wp-admin/includes/plugin.php' ) ) {
+				return null;
+			}
+
+			require_once ABSPATH . 'wp-admin/includes/plugin.php';
+
+			// A require that loaded something other than what we expected
+			// (a stripped install, a mu-plugin shadowing the path).
+			if ( ! function_exists( 'get_plugins' ) ) {
+				return null;
+			}
+		}
+
+		$all_plugins = get_plugins();
+
+		if ( ! is_array( $all_plugins ) ) {
+			return null;
+		}
+
+		$active_plugins = get_option( 'active_plugins', array() );
+
+		if ( ! is_array( $active_plugins ) ) {
+			$active_plugins = array();
+		}
+
+		$plugins = array();
+
+		foreach ( $all_plugins as $slug => $data ) {
+			$plugins[] = array(
+				// The slug is the "folder/file.php" path WordPress keys
+				// active_plugins by — sent as-is so the two lists can be
+				// compared server-side without re-deriving anything.
+				'slug'    => (string) $slug,
+				'name'    => isset( $data['Name'] ) ? (string) $data['Name'] : '',
+				'version' => isset( $data['Version'] ) ? (string) $data['Version'] : '',
+				'active'  => in_array( $slug, $active_plugins, true ),
+			);
+		}
+
+		$theme = wp_get_theme();
+
+		if ( ! is_object( $theme ) || ! method_exists( $theme, 'get' ) ) {
+			return null;
+		}
+
+		$parent = method_exists( $theme, 'parent' ) ? $theme->parent() : null;
+
+		$theme_data = array(
+			'name'         => (string) $theme->get( 'Name' ),
+			'version'      => (string) $theme->get( 'Version' ),
+			'author'       => (string) $theme->get( 'Author' ),
+			// null, not '', when there is no parent: the absence of a
+			// parent theme is a fact, and an empty string would be
+			// indistinguishable from a parent whose name failed to read.
+			'parent_theme' => ( is_object( $parent ) && method_exists( $parent, 'get' ) )
+				? (string) $parent->get( 'Name' )
+				: null,
+		);
+
+		return array(
+			'plugins' => $plugins,
+			'theme'   => $theme_data,
+		);
+	}
+
+	/**
 	 * A UUID for a brand-new installation. The CLIENT generates this —
 	 * journal 8.4: the plugin creates the id locally on first activation
 	 * and resends it on every request, so the server never issues one.

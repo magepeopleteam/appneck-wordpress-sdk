@@ -81,11 +81,17 @@ final class Telemetry {
 	/** @var Consent|null */
 	private $consent = null;
 
-	public function __construct( Client $client, EventQueue $queue, ?Logger $logger = null, ?Consent $consent = null ) {
+	/** @var Environment */
+	private $environment;
+
+	public function __construct( Client $client, EventQueue $queue, ?Logger $logger = null, ?Consent $consent = null, ?Environment $environment = null ) {
 		$this->client  = $client;
 		$this->queue   = $queue;
 		$this->logger  = null !== $logger ? $logger : new NullLogger();
 		$this->consent = $consent;
+		// Defaulted rather than required: the inventory it collects needs
+		// no plugin_file, so every existing caller keeps working unchanged.
+		$this->environment = null !== $environment ? $environment : new Environment();
 		$this->key     = substr( hash( 'sha256', $client->config()->api_key() ), 0, 32 );
 	}
 
@@ -220,10 +226,79 @@ final class Telemetry {
 			return false;
 		}
 
-		return $this->queue->push(
-			self::TYPE_HEARTBEAT,
-			array_merge( array( 'sdk_version' => Sdk::VERSION ), $extra )
-		);
+		$payload = array_merge( array( 'sdk_version' => Sdk::VERSION ), $extra );
+
+		// Rides INSIDE the heartbeat's payload rather than as a sibling of
+		// `events` in the request body, because there is no such thing as
+		// a heartbeat request here — a heartbeat is one queued event among
+		// others (see this class's own doc), and the server reads
+		// payload.environment off events of type `heartbeat`.
+		$environment = $this->environment_payload();
+
+		if ( null !== $environment ) {
+			$payload['environment'] = $environment;
+		}
+
+		return $this->queue->push( self::TYPE_HEARTBEAT, $payload );
+	}
+
+	/**
+	 * The inventory, but only when it has changed since the last time one
+	 * was queued — otherwise null, and the heartbeat carries nothing.
+	 *
+	 * Sending the full list on every heartbeat would be a few KB every 15
+	 * minutes forever to tell the server something it already knows, so
+	 * the SDK hashes the snapshot and stays silent while the hash holds.
+	 * The server keeps the same hash on its side and re-checks it anyway
+	 * (a restored backup can resend a stale hash), so this is a bandwidth
+	 * optimisation, not the correctness mechanism.
+	 *
+	 * The hash is stored at QUEUE time, not send time, and that is safe
+	 * here specifically because push() persists the event locally: once
+	 * queued, the payload survives failed flushes, retries and back-off
+	 * until the server acknowledges it. It would NOT be safe in an SDK
+	 * that sent inline.
+	 *
+	 * Never throws. An inventory that cannot be read is not a reason for a
+	 * site to stop reporting that it is alive.
+	 *
+	 * @return array<string, mixed>|null
+	 */
+	private function environment_payload() {
+		try {
+			$snapshot = $this->environment->plugin_inventory();
+
+			if ( ! is_array( $snapshot ) ) {
+				return null;
+			}
+
+			$encoded = json_encode( $snapshot, JSON_UNESCAPED_UNICODE );
+
+			if ( ! is_string( $encoded ) ) {
+				return null;
+			}
+
+			$hash = hash( 'sha256', $encoded );
+
+			if ( $hash === (string) $this->get_option( 'env_hash', '' ) ) {
+				return null;
+			}
+
+			// autoload=false via update_option()'s third argument (see
+			// update_option() below) — this value is read on a cron tick,
+			// not on every page load, and has no business in the options
+			// autoload cache.
+			$this->update_option( 'env_hash', $hash );
+
+			return array_merge( $snapshot, array( 'hash' => $hash ) );
+		} catch ( \Throwable $e ) {
+			$this->logger->error(
+				'Could not collect the site environment; heartbeat sent without it.',
+				array( 'error' => $e->getMessage() )
+			);
+
+			return null;
+		}
 	}
 
 	// -----------------------------------------------------------------
@@ -554,6 +629,11 @@ final class Telemetry {
 	public function resume() {
 		$this->delete_option( 'stopped' );
 		$this->delete_option( 'suppressed_until' );
+		// The backlog was purged when this installation was stopped, which
+		// may have included the environment snapshot. Forgetting the hash
+		// makes the next heartbeat resend it rather than staying silent
+		// about an inventory the server never received.
+		$this->delete_option( 'env_hash' );
 	}
 
 	private function option_name( $suffix ) {
