@@ -53,6 +53,17 @@ final class OrgPanelClient {
 		return $this->request( 'POST', $path, $payload, $this->token );
 	}
 
+	/**
+	 * Added for licensing: the org panel exposes lifecycle transitions as
+	 * PATCH with an `action` verb (journal §22.13), never a DELETE, so
+	 * cancelling a fixture license needs this rather than delete().
+	 *
+	 * @return array{status:int, body:mixed}
+	 */
+	public function patch( $path, array $payload ) {
+		return $this->request( 'PATCH', $path, $payload, $this->token );
+	}
+
 	/** @return array{status:int, body:mixed} */
 	public function delete( $path ) {
 		return $this->request( 'DELETE', $path, null, $this->token );

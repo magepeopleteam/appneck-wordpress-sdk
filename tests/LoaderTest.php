@@ -135,4 +135,58 @@ class LoaderTest extends TestCase {
 			'The bootstrap must be required in exactly one place'
 		);
 	}
+
+	/**
+	 * Every type under src/ must appear in bootstrap.php's registry.
+	 *
+	 * This is the failure that hides: composer.json also declares PSR-4
+	 * autoloading, so a class added to src/ and forgotten here works
+	 * perfectly for anyone developing with Composer, and fatals only on
+	 * the BUNDLED, no-vendor install that most real plugins ship — after
+	 * release, on somebody else's site, with a "Class not found" that
+	 * names a file plainly sitting on disk.
+	 *
+	 * Asserted by walking the directory rather than against a hardcoded
+	 * list, so it keeps holding for classes nobody has written yet.
+	 */
+	public function test_every_class_under_src_is_registered_in_the_bootstrap(): void {
+		$root      = dirname( __DIR__ );
+		$bootstrap = file_get_contents( $root . '/bootstrap.php' );
+
+		$files = new \RecursiveIteratorIterator(
+			new \RecursiveDirectoryIterator( $root . '/src', \FilesystemIterator::SKIP_DOTS )
+		);
+
+		$checked = 0;
+
+		foreach ( $files as $file ) {
+			if ( 'php' !== $file->getExtension() ) {
+				continue;
+			}
+
+			// src/Foo/Bar.php  ->  Appneck\Sdk\Foo\Bar
+			$relative = substr( $file->getPathname(), strlen( $root . '/src/' ), -4 );
+			$class    = 'Appneck\\Sdk\\' . str_replace( '/', '\\', $relative );
+
+			// The registry writes them escaped, as PHP string literals.
+			$needle = "'" . str_replace( '\\', '\\\\', $class ) . "'";
+
+			$this->assertStringContainsString(
+				$needle,
+				$bootstrap,
+				$class . ' is not registered in bootstrap.php — it would be missing on a no-Composer install.'
+			);
+
+			$this->assertTrue(
+				class_exists( $class ) || interface_exists( $class ),
+				$class . ' is registered but did not load.'
+			);
+
+			++$checked;
+		}
+
+		// A guard on the guard: a broken path would otherwise make this
+		// test pass by iterating nothing at all.
+		$this->assertGreaterThan( 20, $checked );
+	}
 }

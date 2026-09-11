@@ -1,6 +1,6 @@
 {
     "name": "appneck/wordpress-sdk",
-    "description": "Official Appneck SDK for WordPress plugins — signed telemetry, consent, uninstall surveys and announcements.",
+    "description": "Official Appneck SDK for WordPress plugins — signed telemetry, consent, uninstall surveys, announcements and licensing.",
     "type": "library",
     "license": "proprietary",
     "require": {

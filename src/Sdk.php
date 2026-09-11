@@ -5,12 +5,14 @@ namespace Appneck\Sdk;
 use Appneck\Sdk\Admin\AnnouncementNotices;
 use Appneck\Sdk\Admin\ConsentNotice;
 use Appneck\Sdk\Admin\DeactivationSurvey;
+use Appneck\Sdk\Admin\LicenseForm;
 use Appneck\Sdk\Http\Transport;
 use Appneck\Sdk\Queue\EventQueue;
 use Appneck\Sdk\Queue\TableEventQueue;
 use Appneck\Sdk\Logging\Logger;
 use Appneck\Sdk\Storage\CredentialStore;
 use Appneck\Sdk\Storage\WpOptionsCredentialStore;
+use Appneck\Sdk\Storage\WpOptionsLicenseStore;
 
 /**
  * The one entry point a plugin author is expected to touch.
@@ -62,7 +64,21 @@ final class Sdk {
 	 * activation/deactivation/cron hooks, and hand back the lifecycle so
 	 * the caller can reach it from uninstall.php.
 	 *
-	 * @param string $plugin_file __FILE__ of the plugin's main file.
+	 * @param string               $plugin_file __FILE__ of the plugin's main file.
+	 * @param array<string, mixed> $options     Optional per-product settings.
+	 *                                          Licensing reads
+	 *                                          `license_fail_mode`
+	 *                                          ('open' — the default — or
+	 *                                          'closed'), `license_cache_ttl`
+	 *                                          (seconds, default 86400) and
+	 *                                          `license_domain` (overrides
+	 *                                          home_url()). Unknown keys are
+	 *                                          ignored, so a plugin built
+	 *                                          against a newer SDK's options
+	 *                                          still boots on an older copy
+	 *                                          that another plugin's bundle
+	 *                                          happened to win the registry
+	 *                                          with.
 	 * @return Plugin Handle exposing track()/track_error() and the rest.
 	 */
 	public static function bootstrap(
@@ -73,7 +89,8 @@ final class Sdk {
 		?CredentialStore $credentials = null,
 		?Transport $transport = null,
 		?Logger $logger = null,
-		?EventQueue $queue = null
+		?EventQueue $queue = null,
+		array $options = array()
 	) {
 		$client = self::client( $api_key, $product_secret, $base_url, $credentials, $transport, $logger );
 
@@ -90,16 +107,16 @@ final class Sdk {
 		// in either constructor so both stay independently constructible.
 		$telemetry->set_consent( $consent );
 
-		$plugin_name  = $environment->plugin_name();
-		$notice       = new ConsentNotice(
+		$plugin_name = $environment->plugin_name();
+		$notice      = new ConsentNotice(
 			$consent,
 			null !== $plugin_name ? array( 'product_name' => $plugin_name ) : array()
 		);
 
 		// S4.5: the deactivation survey. Its own key rather than reading
 		// Consent's, so neither depends on the other's option naming.
-		$survey            = new Survey( $client, $logger );
-		$deactivationKey   = substr( hash( 'sha256', $api_key ), 0, 32 );
+		$survey             = new Survey( $client, $logger );
+		$deactivationKey    = substr( hash( 'sha256', $api_key ), 0, 32 );
 		$deactivationSurvey = new DeactivationSurvey(
 			$survey,
 			$deactivationKey,
@@ -114,6 +131,26 @@ final class Sdk {
 		$announcements      = new Announcements( $client, $logger );
 		$announcementNotice = new AnnouncementNotices( $announcements, $deactivationKey );
 
+		// Phase 5: licensing. Its own client, because journal §23.1's auth
+		// is a different scheme signed with a different secret and — the
+		// part that matters — must work for a site with no installation
+		// at all. See LicenseClient's class doc.
+		//
+		// Constructing it here costs nothing: License performs no I/O
+		// until one of its methods is called, and is_valid()'s hot path
+		// is a single autoloaded option read.
+		$license = new License(
+			new LicenseClient( $client->config(), $transport, $logger ),
+			new WpOptionsLicenseStore( $api_key ),
+			$logger,
+			$options
+		);
+
+		$license_form = new LicenseForm(
+			$license,
+			null !== $plugin_name ? array( 'product_name' => $plugin_name ) : array()
+		);
+
 		$lifecycle->register_hooks();
 		$telemetry->register_hooks();
 		$consent->register_hooks();
@@ -121,6 +158,9 @@ final class Sdk {
 		$deactivationSurvey->register_hooks();
 		$announcements->register_hooks();
 		$announcementNotice->register_hooks();
+		// Registers the admin-post handler ONLY. The panel itself prints
+		// nowhere until the host plugin calls render() on its own page.
+		$license_form->register_hooks();
 
 		return new Plugin(
 			$client,
@@ -131,7 +171,9 @@ final class Sdk {
 			$survey,
 			$deactivationSurvey,
 			$announcements,
-			$announcementNotice
+			$announcementNotice,
+			$license,
+			$license_form
 		);
 	}
 
@@ -183,6 +225,19 @@ final class Sdk {
 		// plugin too — nothing on the server tracks either (journal 9.3b
 		// is display-only), so this is the only copy there was.
 		( new Announcements( $client, $logger ) )->forget();
+
+		// The license is the one piece of uninstall cleanup with a
+		// SERVER-side consequence: the activation slot this domain holds
+		// stays held unless it is released. Best-effort on the
+		// short-timeout transport and the local row goes either way —
+		// an uninstall must never block or fail on a licensing call, and
+		// there is no local state left for a retry to live in. See
+		// License::on_uninstall().
+		( new License(
+			new LicenseClient( $client->config(), $transport, $logger ),
+			new WpOptionsLicenseStore( $api_key ),
+			$logger
+		) )->on_uninstall();
 
 		return $response;
 	}

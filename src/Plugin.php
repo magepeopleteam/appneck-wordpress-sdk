@@ -5,6 +5,7 @@ namespace Appneck\Sdk;
 use Appneck\Sdk\Admin\AnnouncementNotices;
 use Appneck\Sdk\Admin\ConsentNotice;
 use Appneck\Sdk\Admin\DeactivationSurvey;
+use Appneck\Sdk\Admin\LicenseForm;
 
 /**
  * What Sdk::bootstrap() hands back: the one object a plugin author keeps
@@ -51,6 +52,12 @@ final class Plugin {
 	/** @var AnnouncementNotices|null */
 	private $announcement_notices;
 
+	/** @var License|null */
+	private $license;
+
+	/** @var LicenseForm|null */
+	private $license_form;
+
 	public function __construct(
 		Client $client,
 		Lifecycle $lifecycle,
@@ -60,17 +67,21 @@ final class Plugin {
 		?Survey $survey = null,
 		?DeactivationSurvey $deactivation_survey = null,
 		?Announcements $announcements = null,
-		?AnnouncementNotices $announcement_notices = null
+		?AnnouncementNotices $announcement_notices = null,
+		?License $license = null,
+		?LicenseForm $license_form = null
 	) {
-		$this->client              = $client;
-		$this->lifecycle           = $lifecycle;
-		$this->telemetry           = $telemetry;
-		$this->consent             = $consent;
-		$this->consent_notice      = $consent_notice;
-		$this->survey              = $survey;
-		$this->deactivation_survey = $deactivation_survey;
-		$this->announcements       = $announcements;
+		$this->client               = $client;
+		$this->lifecycle            = $lifecycle;
+		$this->telemetry            = $telemetry;
+		$this->consent              = $consent;
+		$this->consent_notice       = $consent_notice;
+		$this->survey               = $survey;
+		$this->deactivation_survey  = $deactivation_survey;
+		$this->announcements        = $announcements;
 		$this->announcement_notices = $announcement_notices;
+		$this->license              = $license;
+		$this->license_form         = $license_form;
 	}
 
 	/**
@@ -188,5 +199,34 @@ final class Plugin {
 	 */
 	public function announcement_notices() {
 		return $this->announcement_notices;
+	}
+
+	/**
+	 * The site's license. The one method most plugins will call:
+	 *
+	 *     if ( $sdk->license()->is_valid() ) { … premium feature … }
+	 *
+	 * is_valid() is safe on every page load — it answers from an
+	 * autoloaded option and makes no network call unless its 24-hour
+	 * cache has expired. See License's class doc for the full contract,
+	 * including what happens when the license server is unreachable.
+	 *
+	 * @return License|null Null only when built without licensing.
+	 */
+	public function license() {
+		return $this->license;
+	}
+
+	/**
+	 * The license panel, which prints NOWHERE until the host plugin says
+	 * where — a key input appearing unbidden on somebody else's settings
+	 * screen is indistinguishable from a phishing field:
+	 *
+	 *     $sdk->license_form()->render();
+	 *
+	 * @return LicenseForm|null
+	 */
+	public function license_form() {
+		return $this->license_form;
 	}
 }

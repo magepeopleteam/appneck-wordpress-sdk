@@ -1,10 +1,11 @@
 # Appneck SDK for WordPress plugins
 
 The client library a plugin embeds to talk to Appneck: signed telemetry, consent,
-uninstall surveys and announcements. This is the whole SDK surface — every
-endpoint in the `/sdk/v1/*` zone has a client-side helper: registration and
+uninstall surveys, announcements and licensing. This is the whole SDK surface —
+every endpoint in the `/sdk/v1/*` zone has a client-side helper: registration and
 lifecycle, a local event queue with `track()`/`track_error()`, the consent
-prompt, the deactivation survey, and announcement fetch/display.
+prompt, the deactivation survey, announcement fetch/display, and licence
+activation/validation with a local cache.
 
 Requires PHP 7.2+. No runtime dependencies.
 
@@ -24,6 +25,7 @@ follows the order you'll actually touch these pieces in as a plugin author.)*
 - [Consent](#consent) — what's automatic, what you configure, what not to do
 - [Deactivation survey](#deactivation-survey) — configured in the Org Panel, not code
 - [Announcements](#announcements) — same: authored in the Org Panel, not code
+- [Licensing](#licensing) — `is_valid()`, fail-open, and the retry backoff
 - [Signing](#signing)
 - [Storage](#storage)
 - [Filters reference](#filters-reference) — every customization hook this SDK exposes
@@ -87,8 +89,10 @@ $GLOBALS['acme_sdk'] = \Appneck\Sdk\Sdk::bootstrap(
 ```
 
 `Sdk::bootstrap()` wires everything by itself — activation, deactivation, the
-registration cron, the consent prompt, the deactivation survey, announcements.
-There is nothing else to call for any of those.
+registration cron, the consent prompt, the deactivation survey, announcements,
+and licensing. There is nothing else to call for any of those. (The one thing
+it deliberately does *not* print anywhere is the licence settings panel — see
+[Licensing](#licensing).)
 
 **Call this at your plugin's top level, not inside `add_action('plugins_loaded', ...)`
 — confirmed by running this exact pattern against real WordPress core, not
@@ -802,9 +806,162 @@ that page view, which is the opposite of what a stored dismissal means.
 
 ---
 
+## Licensing
+
+For selling a premium plugin. Wired by `bootstrap()`; nothing to schedule.
+
+```php
+if ( $sdk->license()->is_valid() ) {
+    // premium feature
+}
+```
+
+### `is_valid()` is safe to call on every page load
+
+That is a design guarantee, not a hope. Four properties make it true:
+
+- One **autoloaded** `wp_options` read. WordPress already fetches that row
+  in the single query it makes at the start of every request, so the
+  common path costs **no extra query**.
+- **No network call** unless the cached result is older than the TTL (24
+  hours by default) *and* the server isn't already known to be
+  unreachable.
+- **Never throws.** Every path returns a bool.
+- **No key stored → `false`, and zero HTTP, forever.** A site that never
+  entered a key generates no licensing traffic at all.
+
+The exact order it evaluates:
+
+1. No key stored → `false`, no call.
+2. Cache fresh → the cached flag, no call.
+3. Inside the retry backoff → the fail-mode answer, no call.
+4. Otherwise → one `validate` call (5s timeout), then answer.
+
+### The public API
+
+| Method | Returns | Notes |
+|---|---|---|
+| `is_valid()` | `bool` | The hot path. Above. |
+| `get_status()` | `array` | For rendering. Never makes a network call. |
+| `activate( $key )` | `Http\Response` | Human-triggered. No caching, no backoff. |
+| `deactivate( $key )` | `Http\Response` | Same. |
+| `validate( $key )` | `Http\Response` | Force a re-check now. |
+| `failure_count()` / `next_attempt_at()` | `int` | Backoff introspection. |
+
+`get_status()` keys: `has_license`, `license_key` (masked to the last 4
+characters), `status`, `reason`, `customer_name`, `expires_at`,
+`activation_limit`, `activations_used`, `valid`, `last_checked_at`,
+`stale`, `next_attempt_at`, `fail_mode`.
+
+Two rules that each prevent a support ticket:
+
+- **A rejected key is not stored** — otherwise the site spends its life
+  re-validating a key the server already refused.
+- **A failed deactivation does not clear local state.** The server still
+  counts this domain as holding a slot; forgetting the key locally would
+  strand it with the customer holding nothing to release it with.
+
+### The admin panel
+
+```php
+$sdk->license_form()->render();   // on YOUR settings page
+```
+
+Prints **nowhere** until you call it. A licence key input appearing
+unbidden on a screen the site owner didn't associate with your product is
+indistinguishable from a phishing field. `admin-post.php`, nonce-verified,
+`manage_options`, no enqueued assets, no build step.
+
+### Fail-open is the default, and it is narrow
+
+Unreachable server → the customer keeps their features. Precisely:
+
+- It returns the **last definitive answer**, never a blanket `true`. An
+  outage does not upgrade a known-invalid licence to valid — otherwise the
+  whole system would be defeatable by blocking one hostname.
+- A key that has **never once validated successfully** → `false`.
+- A definitive answer is always honoured, including a negative one. Only
+  a 2xx whose JSON parsed is definitive: a 5xx, a 429, a 401 from a
+  rotated secret and an HTML error page from a WAF are all "no answer",
+  because none of them is the server saying anything about this licence.
+
+To invert it — features locked when the server can't be reached:
+
+```php
+$sdk = \Appneck\Sdk\Sdk::bootstrap(
+    'pk_...', 'sk_...', 'https://appneck.com', __FILE__,
+    null, null, null, null,
+    array( 'license_fail_mode' => 'closed' )
+);
+```
+
+### Why isn't it retrying?
+
+Because it is **deliberately** waiting. After a failed check:
+
+| Consecutive failures | Wait |
+|---|---|
+| 1 | 5 minutes |
+| 2 | 15 minutes |
+| 3 | 1 hour |
+| 4 | 6 hours |
+| 5+ | 24 hours (hard ceiling — jitter cannot push past it) |
+
+±20% jitter, rolled **once** when the failure is recorded and stored as an
+absolute timestamp — re-rolling it per read would make the wait random per
+page load rather than per failure, which is noise, not a spread. Any
+success resets the counter.
+
+Without this, every page of a site whose licence server is down would
+block for the request timeout, and every affected site retrying on every
+page load would turn an outage into a flood aimed at the recovering
+server. `failure_count()` and `next_attempt_at()` expose both halves of
+the answer.
+
+### Options
+
+Ninth argument to `bootstrap()`:
+
+| Option | Default | Meaning |
+|---|---|---|
+| `license_fail_mode` | `'open'` | `'closed'` locks features when unreachable. Anything not exactly `'closed'` is open — a typo must not lock a customer out. |
+| `license_cache_ttl` | `86400` | Seconds before a cached result is re-checked. |
+| `license_domain` | *(`home_url()`)* | Override the activation domain, e.g. so a staging clone doesn't consume the production slot. |
+
+### Domain normalisation
+
+Byte-for-byte the server's rule (journal §22.8): trim, strip any scheme,
+keep everything before the first `/`, lowercase. **`www.` is not stripped,
+and neither is a port** — `www.example.com` is a genuinely different host,
+and merging it would collapse a real multi-site setup into one slot. This
+*must* match the server: it enforces "one domain, one active activation"
+with a Postgres partial unique index on the normalised string, so a client
+that normalised differently would let one install quietly burn two slots.
+
+Pinned by `LicenseTest::test_domain_normalization_matches_the_servers_cases`
+against the same 17 fixtures the server's own implementation was run over
+side by side.
+
+### It works with no analytics consent
+
+Licensing authenticates at the **product** level and requires no
+installation at any point (journal §23.1). A customer who declined
+telemetry has no installation row, and their licence still works — a
+paying customer is never held hostage by an unrelated opt-in.
+
+### Uninstall
+
+`Sdk::uninstall()` makes one best-effort, short-timeout deactivation call
+so the slot is freed, then deletes the stored row regardless of the
+outcome. This is the one place the keep-state-on-failure rule is inverted,
+deliberately: the plugin is going away either way, so there is no local
+state left for a retry to live in.
+
+---
+
 ## Signing
 
-Every request is HMAC-signed per journal §9.2a:
+Every telemetry request is HMAC-signed per journal §9.2a:
 
 ```
 X-Signature = HMAC_SHA256(base_string, secret)
@@ -823,6 +980,27 @@ secret is stored. That fallback would let any installation sign as any other
 installation of the same product, which is precisely the hole per-installation
 secrets exist to close.
 
+### Licensing signs differently (journal §23.1)
+
+`/sdk/v1/licenses/*` uses a **second, separate** scheme —
+`Appneck\Sdk\LicenseSigner`, not `Signer`:
+
+```
+X-Signature = HMAC_SHA256( raw-body . timestamp, product secret )
+```
+
+No method, no path, no installation id, and no newlines. Headers are
+`X-Api-Key`, `X-Timestamp`, `X-Signature` — deliberately **no**
+`X-Installation-Id`, because the server neither reads nor requires one.
+
+The two are not interchangeable and must not be merged: licensing has no
+installation to bind against (a customer who declined analytics consent
+never gets one, and their licence must still work), and it is signed with
+the product secret for every call rather than only at bootstrap.
+`LicenseSignerTest` pins the output against a hardcoded fixture vector, so
+a refactor that changed the base string by one byte fails the suite
+instead of 401ing every site in the field.
+
 ---
 
 ## Storage
@@ -833,6 +1011,22 @@ because a pair written separately can be half-restored from a backup, leaving an
 id with no secret — an unauthenticatable state with no recovery, since the secret
 is issued once and never re-issued. Supply your own `CredentialStore` if you need
 different persistence.
+
+The **licence** state (`WpOptionsLicenseStore`) is a separate row and is
+`autoload = yes`, which is the opposite call for the opposite reason:
+`is_valid()` reads it on every page load, so leaving it out of the blob
+WordPress already fetches would add a query to every request. Autoload
+follows read frequency — Consent's row makes the same trade.
+
+It is deliberately **not** a transient. A transient backed by a persistent
+object cache can be evicted at any moment, and eviction is
+indistinguishable from expiry: on a fail-open product that costs an
+unnecessary network call, and on a fail-closed one it locks a paying
+customer out of features at a moment nobody can correlate with anything.
+An option row is durable, so the TTL is arithmetic the SDK does itself
+against a stored timestamp rather than something the storage layer is
+trusted to enforce. Supply your own `LicenseStore` if you need different
+persistence.
 
 ---
 
@@ -1056,7 +1250,7 @@ failed. Two independent gates, both checked in `setUp()`:
 | `APPNECK_SDK_TEST_BASE_URL` | `http://nginx` | The backend to test against. The default matches this monorepo's own Docker network. |
 | `APPNECK_SDK_TEST_API_KEY` / `APPNECK_SDK_TEST_PRODUCT_SECRET` | *(none — required)* | A real product's SDK credentials. Not set → every test skips before touching the network. |
 | `APPNECK_SDK_TEST_SECOND_API_KEY` / `APPNECK_SDK_TEST_SECOND_PRODUCT_SECRET` | *(none)* | A **second** product's SDK credentials, with nothing configured on it — used for the cross-product-isolation and zero-announcements/zero-survey cases. Not set → those specific assertions report `markTestIncomplete` rather than being silently skipped whole-test, so a missing second product doesn't quietly hide a real gap. |
-| `APPNECK_SDK_TEST_ORGANIZATION_ID` / `APPNECK_SDK_TEST_PRODUCT_ID` | *(none)* | The organization/product ids matching the primary API key above. Needed only by the two tests that author real fixtures through the Org Panel API (survey questions, announcements) — not set → those two tests skip, the other five still run. |
+| `APPNECK_SDK_TEST_ORGANIZATION_ID` / `APPNECK_SDK_TEST_PRODUCT_ID` | *(none)* | The organization/product ids matching the primary API key above. Needed only by the tests that author real fixtures through the Org Panel API (survey questions, announcements, and licensing's plan + licence) — not set → those tests skip, the rest still run. |
 | `APPNECK_SDK_TEST_ORG_EMAIL` / `APPNECK_SDK_TEST_ORG_PASSWORD` | `demo@example.com` / `password` | A real dashboard user, logged in via `POST /app/v1/auth/login` to get a bearer token for authoring those same fixtures. The default is this monorepo's own seeded dev fixture (`DemoSeeder` prints it to the console as seeded, not a secret) — override for anything else. |
 
 **One environment choice, not a per-run manual step:** the primary product
