@@ -135,6 +135,9 @@ final class License {
 	/** @var string|null Set explicitly, bypassing home_url(). */
 	private $domain = null;
 
+	/** @var string|null Set by Admin\LicensePage::register(). */
+	private $page_url = null;
+
 	/** @var string Per-product suffix, shared with the admin form. */
 	private $key;
 
@@ -297,7 +300,9 @@ final class License {
 			return $this->blank_status();
 		}
 
-		$fresh = $this->cache_is_fresh( $state );
+		$fresh           = $this->cache_is_fresh( $state );
+		$domain_mismatch = null !== $state['validated_domain']
+			&& $state['validated_domain'] !== $this->domain();
 
 		return array(
 			'has_license'      => true,
@@ -312,12 +317,15 @@ final class License {
 			'activation_limit' => $state['activation_limit'],
 			'activations_used' => $state['activations_used'],
 			'valid'            => $fresh ? $this->last_known_valid( $state ) : $this->fail_mode_answer( $state ),
+			'domain_mismatch'  => $domain_mismatch,
 			'last_checked_at'  => $state['validated_at'] > 0 ? $state['validated_at'] : null,
 			// "The cache has expired and we could not reach the server."
 			// Both halves are required: a merely-expired cache on a
 			// healthy site is about to refresh itself and is not worth
 			// warning anybody about.
-			'stale'            => ! $fresh && $state['failure_count'] > 0,
+			'stale'            => ! $fresh
+				&& $state['failure_domain'] === $this->domain()
+				&& $state['failure_count'] > 0,
 			'failure_count'    => $state['failure_count'],
 			'next_attempt_at'  => $state['next_attempt_at'] > 0 ? $state['next_attempt_at'] : null,
 			'fail_mode'        => $this->fail_mode,
@@ -336,12 +344,85 @@ final class License {
 			'activation_limit' => null,
 			'activations_used' => null,
 			'valid'            => false,
+			'domain_mismatch'  => false,
 			'last_checked_at'  => null,
 			'stale'            => false,
 			'failure_count'    => 0,
 			'next_attempt_at'  => null,
 			'fail_mode'        => $this->fail_mode,
 		);
+	}
+
+	/**
+	 * Set once, by Admin\LicensePage::register(), so require_valid()
+	 * below can link to wherever the host plugin actually put the
+	 * license screen — this class has no way to know that on its own,
+	 * and does not guess at a URL.
+	 *
+	 * @param string $url
+	 */
+	public function set_page_url( $url ) {
+		$this->page_url = (string) $url;
+
+		return $this;
+	}
+
+	/** @return string|null Null until a LicensePage has registered. */
+	public function page_url() {
+		return $this->page_url;
+	}
+
+	/**
+	 * The gate a pro feature's own admin screen calls first:
+	 *
+	 *     if ( ! $sdk->license()->require_valid() ) { return; }
+	 *
+	 * Prints a styled notice and returns false when the license is not
+	 * valid; prints nothing and returns true otherwise. Never exits or
+	 * dies — the one thing this method must not decide is whether the
+	 * calling page still renders something after it, because a host
+	 * plugin's page may have its own reasons to keep going (a read-only
+	 * preview of the pro feature, for instance).
+	 *
+	 * This is the one method on License that prints anything — everywhere
+	 * else in this class is deliberately presentation-free. It earns the
+	 * exception because the public API asked for it directly on
+	 * `$sdk->license()`, not on a rendering helper the caller would have
+	 * to know to reach for instead; the same function_exists guards every
+	 * other WordPress call in this file already uses keep it safe to call
+	 * from this package's own non-WordPress tests.
+	 *
+	 * @param string|null $message Overrides the default sentence.
+	 * @return bool
+	 */
+	public function require_valid( $message = null ) {
+		if ( $this->is_valid() ) {
+			return true;
+		}
+
+		if ( ! function_exists( 'esc_html' ) || ! function_exists( 'esc_url' ) ) {
+			return false;
+		}
+
+		$status = $this->get_status();
+
+		$text = null !== $message
+			? (string) $message
+			: 'This feature requires an active license. '
+				. \Appneck\Sdk\Admin\LicenseMessages::for_reason(
+					$status['reason'],
+					empty( $status['has_license'] ) ? 'Enter a license key to unlock this feature.' : 'This license is not currently active.'
+				);
+
+		echo '<div class="notice notice-warning"><p>' . esc_html( $text );
+
+		if ( null !== $this->page_url && '' !== $this->page_url ) {
+			echo ' <a href="' . esc_url( $this->page_url ) . '">' . esc_html( 'Manage your license' ) . '</a>';
+		}
+
+		echo '</p></div>';
+
+		return false;
 	}
 
 	// -----------------------------------------------------------------
@@ -660,6 +741,14 @@ final class License {
 	 * @return bool
 	 */
 	private function cache_is_fresh( array $state ) {
+		// A definitive answer belongs to the domain that was validated.
+		// A database/search-replace migration can leave the product-scoped
+		// option intact while home_url() changes; that answer is not a cache
+		// hit on the new site.
+		if ( $state['validated_domain'] !== $this->domain() ) {
+			return false;
+		}
+
 		if ( $state['validated_at'] <= 0 ) {
 			return false;
 		}
@@ -679,7 +768,9 @@ final class License {
 	 * @return bool
 	 */
 	private function in_backoff( array $state ) {
-		return $state['next_attempt_at'] > 0 && time() < $state['next_attempt_at'];
+		return $state['failure_domain'] === $this->domain()
+			&& $state['next_attempt_at'] > 0
+			&& time() < $state['next_attempt_at'];
 	}
 
 	/**
@@ -689,7 +780,7 @@ final class License {
 	 * @return bool
 	 */
 	private function last_known_valid( array $state ) {
-		return true === $state['valid'];
+		return $state['validated_domain'] === $this->domain() && true === $state['valid'];
 	}
 
 	/**
@@ -711,8 +802,9 @@ final class License {
 	private function record_result( array $state, Response $response, $license_key ) {
 		$data = $response->data();
 
-		$state['license_key'] = $license_key;
-		$state['valid']       = ! empty( $data['valid'] );
+		$state['license_key']      = $license_key;
+		$state['valid']            = ! empty( $data['valid'] );
+		$state['validated_domain'] = $this->domain();
 
 		// Absent fields keep their previous value rather than being
 		// blanked. /validate's success shape carries status and
@@ -748,6 +840,7 @@ final class License {
 		$state['failure_count']   = 0;
 		$state['failed_at']       = 0;
 		$state['next_attempt_at'] = 0;
+		$state['failure_domain']  = null;
 
 		$this->store->write( $state );
 	}
@@ -769,6 +862,7 @@ final class License {
 		$state['failure_count']   = $count;
 		$state['failed_at']       = time();
 		$state['next_attempt_at'] = time() + $this->backoff_delay( $count );
+		$state['failure_domain']  = $this->domain();
 
 		$this->store->write( $state );
 	}
@@ -846,6 +940,8 @@ final class License {
 
 		$state['status']           = $this->scalar_or( $stored, 'status', null );
 		$state['reason']           = $this->scalar_or( $stored, 'reason', null );
+		$state['validated_domain'] = $this->scalar_or( $stored, 'validated_domain', null );
+		$state['failure_domain']   = $this->scalar_or( $stored, 'failure_domain', null );
 		$state['customer_name']    = $this->scalar_or( $stored, 'customer_name', null );
 		$state['expires_at']       = $this->scalar_or( $stored, 'expires_at', null );
 		$state['activation_limit'] = $this->int_or( $stored, 'activation_limit', null );
@@ -866,6 +962,8 @@ final class License {
 			'valid'            => null,
 			'status'           => null,
 			'reason'           => null,
+			'validated_domain' => null,
+			'failure_domain'   => null,
 			'customer_name'    => null,
 			'expires_at'       => null,
 			'activation_limit' => null,

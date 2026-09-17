@@ -872,6 +872,143 @@ unbidden on a screen the site owner didn't associate with your product is
 indistinguishable from a phishing field. `admin-post.php`, nonce-verified,
 `manage_options`, no enqueued assets, no build step.
 
+### The complete license page — one call
+
+For a whole license screen (menu item, every state, the Activate/
+Deactivate form, all handled), rather than a fragment on a page you build
+yourself:
+
+```php
+$sdk->license_page( array(
+    'parent'       => 'options-general.php',           // null = top-level menu
+    'page_title'   => 'License',
+    'menu_title'   => 'License',
+    'capability'   => 'manage_options',
+    'purchase_url' => 'https://example.com/pricing',    // shown when there's no license
+    'renew_url'    => 'https://example.com/account',    // shown when expired
+    'support_url'  => 'https://example.com/support',    // shown when suspended/cancelled/refunded/revoked
+    'notice'       => true,                             // opt-in unlicensed nag, see below
+) );
+```
+
+Every argument is optional; calling `$sdk->license_page()` with nothing
+registers a working top-level "License" menu item. `menu_slug` defaults
+to one derived from your own product's API key, so two different plugins
+on one site that each bundle this SDK never collide on a menu slug even
+if neither developer thought about it.
+
+This is a **different** thing from `license_form()` above, not a
+replacement for it — see `Admin\LicensePage`'s own class doc for the full
+reasoning. Use `license_form()->render()` if you already have a settings
+page and want the license panel to live inside it; use `license_page()`
+if you want the SDK to register and own the whole page.
+
+**Call it before `admin_menu` fires — at your plugin's top level or on
+`plugins_loaded`, never from inside an `admin_menu` callback.**
+`license_page()` registers its own `add_menu_page()` call on `admin_menu`
+at the normal default priority. If you call `license_page()` from *inside*
+a LATER-priority `admin_menu` callback, WordPress has already passed the
+default priority for that request by the time your callback runs, so the
+menu item is silently skipped — no error, no warning, the page just never
+appears. (This is a real WordPress hook-ordering rule, not something
+specific to this SDK, but it is an easy trap to fall into if menu
+registration feels like an "admin_menu thing" you'd naturally reach for.)
+
+**What a customer sees, per state:**
+
+| State | What it shows |
+|---|---|
+| No license | A key input and Activate button; a "buy one" link if you gave `purchase_url`. |
+| Active | Masked key (last 4 characters only), who it's licensed to, expiry as a real date **and** a relative phrase ("expires in 11 months"), sites used ("2 of 5" or "2 of Unlimited" for an unlimited plan), a Deactivate button with a confirmation explaining the site loses its pro features. |
+| Expired | The key stays visible (needed to renew), a plain explanation that the plugin keeps working and only updates/support stop, and a Renew link if you gave `renew_url`. |
+| Suspended | An explanation that the publisher suspended it and support can help — no Activate button, because retrying cannot fix this. |
+| Cancelled / refunded / revoked | Wording specific to each — read from the server's own reason, never a guessed label. |
+| Activation limit reached | Shown as the result of a failed Activate attempt, not a stored page state — says the plan's limit is reached and to either deactivate elsewhere or upgrade. |
+| Server unreachable, last known valid | The last confirmed status, clearly labelled as such, when it was last confirmed, and a note that this keeps working and retries automatically — deliberately not alarming, since this is almost always a transient network blip on a paying customer's site. |
+| Server unreachable, never confirmed | A different message from the above — there is no license key that ever validated, so it says the connection could not be verified and to check it, without implying anything was ever working. |
+
+### Gating a pro feature
+
+```php
+if ( ! $sdk->license()->require_valid() ) {
+    return; // prints its own explanatory notice; never exits
+}
+```
+
+Call it at the top of a pro feature's own admin page. It prints a styled
+notice (linking to the license page, once you've called `license_page()`)
+and returns `false` when the license isn't valid; returns `true` and
+prints nothing otherwise. It never calls `exit`/`wp_die` — what happens to
+the rest of the page after a `false` is entirely your call. Pass a string
+to override the default message: `require_valid( 'Upgrade to Pro to use this report.' )`.
+
+### The unlicensed nag — opt-in, and narrow on purpose
+
+`license_page( array( 'notice' => true ) )` turns on a dismissible admin
+notice prompting activation. It is **off by default** and, even enabled,
+prints in exactly two places: your license page's own screen, and the
+Plugins screen — never site-wide. A dismissal persists (stored in an
+option, not a transient — see `License`'s own class doc for why a
+persistent-cache-backed store is the wrong layer for anything that must
+not silently reappear a day early) and the notice stays hidden for about
+a week before it can show again. It never appears at all while the
+license is valid, and — just as importantly — it stays silent while the
+license is merely *unreachable but was last confirmed valid*: a network
+blip must never nag a paying customer.
+
+### The SDK never hands your code the raw key
+
+Not `get_status()`, not `license_form()`, not `license_page()`, not any
+public method on `License`. The key is stored (it has to be, to sign
+`validate`/`deactivate` calls) but nothing in this package's public API
+returns it — `get_status()['license_key']` is always masked to the last 4
+characters. Deactivating the stored license goes through
+`deactivate_stored()`, which reads the raw key out of storage internally
+and never gives it back to the caller, precisely so a page that only ever
+renders a masked key never has the real one to leak.
+
+### A complete reference plugin
+
+```php
+<?php
+/**
+ * Plugin Name: Acme Bookings Pro
+ */
+require_once __DIR__ . '/vendor/appneck/wordpress-sdk/appneck-sdk.php';
+appneck_sdk_load_latest();
+
+$sdk = \Appneck\Sdk\Sdk::bootstrap(
+    'pk_your_product_api_key',
+    'sk_your_product_secret',
+    'https://appneck.com',
+    __FILE__
+);
+
+// A full license screen, under Settings, with the unlicensed nag on.
+add_action( 'plugins_loaded', function () use ( $sdk ) {
+    $sdk->license_page( array(
+        'parent'       => 'options-general.php',
+        'purchase_url' => 'https://example.com/pricing',
+        'renew_url'    => 'https://example.com/account',
+        'support_url'  => 'https://example.com/support',
+        'notice'       => true,
+    ) );
+} );
+
+// One pro feature, gated.
+add_action( 'admin_menu', function () use ( $sdk ) {
+    add_submenu_page( 'options-general.php', 'Acme Reports', 'Acme Reports', 'manage_options', 'acme-reports', function () use ( $sdk ) {
+        echo '<div class="wrap"><h1>Acme Reports</h1>';
+
+        if ( $sdk->license()->require_valid() ) {
+            echo '<p>Your premium report goes here.</p>';
+        }
+
+        echo '</div>';
+    } );
+} );
+```
+
 ### Fail-open is the default, and it is narrow
 
 Unreachable server → the customer keeps their features. Precisely:

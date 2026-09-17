@@ -74,13 +74,14 @@ class LicenseTest extends TestCase {
 		$this->store->write(
 			array_merge(
 				array(
-					'license_key'     => self::KEY,
-					'valid'           => true,
-					'status'          => 'active',
-					'validated_at'    => time(),
-					'failure_count'   => 0,
-					'failed_at'       => 0,
-					'next_attempt_at' => 0,
+					'license_key'      => self::KEY,
+					'valid'            => true,
+					'status'           => 'active',
+					'validated_domain' => self::DOMAIN,
+					'validated_at'     => time(),
+					'failure_count'    => 0,
+					'failed_at'        => 0,
+					'next_attempt_at'  => 0,
 				),
 				$state
 			)
@@ -150,6 +151,36 @@ class LicenseTest extends TestCase {
 		$this->assertSame( 0, $this->transport->count() );
 	}
 
+	public function test_a_fresh_valid_cache_from_another_domain_is_revalidated(): void {
+		$this->seed(
+			array(
+				'valid'            => true,
+				'validated_domain' => 'old.example',
+				'validated_at'     => time() - 60,
+			)
+		);
+		$this->queue_invalid();
+
+		$this->assertFalse( $this->license()->is_valid() );
+		$this->assertSame( 1, $this->transport->count() );
+
+		$body = json_decode( $this->transport->last_request()['body'], true );
+		$this->assertSame( self::DOMAIN, $body['domain'] );
+		$this->assertSame( self::DOMAIN, $this->stored()['validated_domain'] );
+	}
+
+	public function test_legacy_cached_state_without_a_domain_revalidates_without_crashing(): void {
+		$this->seed( array( 'valid' => true, 'validated_at' => time() - 60 ) );
+		$legacy = $this->stored();
+		unset( $legacy['validated_domain'] );
+		$this->store->write( $legacy );
+		$this->queue_valid();
+
+		$this->assertTrue( $this->license()->is_valid() );
+		$this->assertSame( 1, $this->transport->count() );
+		$this->assertSame( self::DOMAIN, $this->stored()['validated_domain'] );
+	}
+
 	public function test_a_fresh_negative_cache_is_also_answered_without_a_call(): void {
 		$this->seed(
 			array(
@@ -202,6 +233,43 @@ class LicenseTest extends TestCase {
 		$this->assertSame( 'expired', $stored['reason'] );
 	}
 
+	/**
+	 * The fix journal §27.6/§28 records: the server now includes `status`
+	 * and `expires_at` on a rejection (they were already loaded to decide
+	 * the rejection in the first place), specifically so a stale value
+	 * from an earlier SUCCESS does not go on being displayed once the
+	 * license has expired. This asserts the CLIENT side of that fix:
+	 * scalar_or() already reads any present field unconditionally, so no
+	 * SDK code change was needed — this pins that it actually works, not
+	 * just that it should in theory.
+	 */
+	public function test_an_expired_rejection_updates_the_stored_expiry_rather_than_preserving_the_stale_one(): void {
+		$this->seed(
+			array(
+				'valid'        => true,
+				'status'       => 'active',
+				'expires_at'   => '2027-01-01T00:00:00.000000Z', // The stale value.
+				'validated_at' => time() - 90000,
+			)
+		);
+
+		$this->transport->queue(
+			Response::from_http(
+				200,
+				array(),
+				'{"valid":false,"reason":"expired","status":"active","expires_at":"2026-06-01T00:00:00.000000Z"}'
+			)
+		);
+
+		$this->assertFalse( $this->license()->is_valid() );
+
+		$stored = $this->stored();
+		$this->assertSame( 'expired', $stored['reason'] );
+		// The NEW date from the rejection, not the one seeded above.
+		$this->assertSame( '2026-06-01T00:00:00.000000Z', $stored['expires_at'] );
+		$this->assertSame( 'active', $stored['status'] );
+	}
+
 	// -----------------------------------------------------------------
 	// Fail-open
 	// -----------------------------------------------------------------
@@ -216,6 +284,25 @@ class LicenseTest extends TestCase {
 		$this->queue_transport_failure();
 
 		$this->assertTrue( $this->license()->is_valid() );
+	}
+
+	public function test_fail_open_never_reuses_a_valid_answer_from_another_domain(): void {
+		$this->seed(
+			array(
+				'valid'            => true,
+				'validated_domain' => 'old.example',
+				'validated_at'     => time() - 60,
+			)
+		);
+		$this->queue_transport_failure();
+
+		$this->assertFalse( $this->license()->is_valid() );
+		$this->assertSame( 1, $this->transport->count() );
+
+		// The failed attempt opens a backoff for the NEW domain, while
+		// remaining unable to reuse the old domain's valid answer.
+		$this->assertFalse( $this->license()->is_valid() );
+		$this->assertSame( 1, $this->transport->count() );
 	}
 
 	/**
@@ -494,6 +581,7 @@ class LicenseTest extends TestCase {
 		// /activate answers valid:true only for an active, unexpired
 		// license, but carries no status field of its own.
 		$this->assertSame( 'active', $stored['status'] );
+		$this->assertSame( self::DOMAIN, $stored['validated_domain'] );
 
 		// And the site is immediately licensed, from cache, with no
 		// further call.
@@ -792,7 +880,7 @@ class LicenseTest extends TestCase {
 	 * host, and merging it would collapse a real multi-site setup into
 	 * one slot.
 	 *
-	 * A loop rather than a @dataProvider deliberately: composer.json
+	 * A loop rather than a data-provider annotation deliberately: composer.json
 	 * allows PHPUnit ^9.6 || ^10.5, PHPUnit 12 no longer reads metadata
 	 * from doc comments, and attributes do not parse on the PHP versions
 	 * the older constraint implies. Nothing else in this suite uses a
@@ -900,5 +988,79 @@ class LicenseTest extends TestCase {
 
 		$this->assertTrue( $license->is_valid() );
 		$this->assertSame( 1, $license->failure_count() );
+	}
+
+	// -----------------------------------------------------------------
+	// require_valid() (Phase 8) — the gate a pro feature's own page calls
+	// -----------------------------------------------------------------
+
+	public function test_require_valid_returns_true_and_prints_nothing_when_the_license_is_valid(): void {
+		require_once __DIR__ . '/wp-admin-polyfill.php';
+
+		$this->seed(
+			array(
+				'valid'        => true,
+				'validated_at' => time(),
+			)
+		);
+
+		ob_start();
+		$result = $this->license()->require_valid();
+		$output = (string) ob_get_clean();
+
+		$this->assertTrue( $result );
+		$this->assertSame( '', $output );
+	}
+
+	public function test_require_valid_returns_false_and_prints_a_notice_when_there_is_no_license(): void {
+		require_once __DIR__ . '/wp-admin-polyfill.php';
+
+		ob_start();
+		$result = $this->license()->require_valid();
+		$output = (string) ob_get_clean();
+
+		$this->assertFalse( $result );
+		$this->assertStringContainsString( 'notice-warning', $output );
+		$this->assertStringContainsString( 'license key', $output );
+	}
+
+	public function test_require_valid_surfaces_the_actual_rejection_reason(): void {
+		require_once __DIR__ . '/wp-admin-polyfill.php';
+
+		$this->seed(
+			array(
+				'valid'        => false,
+				'reason'       => 'suspended',
+				'validated_at' => time(),
+			)
+		);
+
+		ob_start();
+		$this->license()->require_valid();
+		$output = (string) ob_get_clean();
+
+		$this->assertStringContainsString( 'suspended', strtolower( $output ) );
+	}
+
+	public function test_require_valid_accepts_a_custom_message(): void {
+		require_once __DIR__ . '/wp-admin-polyfill.php';
+
+		ob_start();
+		$this->license()->require_valid( 'Upgrade to Pro to use this.' );
+		$output = (string) ob_get_clean();
+
+		$this->assertStringContainsString( 'Upgrade to Pro to use this.', $output );
+	}
+
+	public function test_require_valid_links_to_the_page_url_once_one_is_set(): void {
+		require_once __DIR__ . '/wp-admin-polyfill.php';
+
+		$license = $this->license()->set_page_url( 'https://example.test/wp-admin/admin.php?page=acme-license' );
+
+		ob_start();
+		$license->require_valid();
+		$output = (string) ob_get_clean();
+
+		$this->assertStringContainsString( 'https://example.test/wp-admin/admin.php?page=acme-license', $output );
 	}
 }

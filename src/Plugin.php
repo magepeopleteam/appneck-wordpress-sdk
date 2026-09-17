@@ -6,6 +6,7 @@ use Appneck\Sdk\Admin\AnnouncementNotices;
 use Appneck\Sdk\Admin\ConsentNotice;
 use Appneck\Sdk\Admin\DeactivationSurvey;
 use Appneck\Sdk\Admin\LicenseForm;
+use Appneck\Sdk\Admin\LicensePage;
 
 /**
  * What Sdk::bootstrap() hands back: the one object a plugin author keeps
@@ -58,6 +59,12 @@ final class Plugin {
 	/** @var LicenseForm|null */
 	private $license_form;
 
+	/** @var string|null Phase 8: license_page()'s product_name fallback. */
+	private $product_name;
+
+	/** @var LicensePage|null Built lazily, on the first license_page() call. */
+	private $license_page;
+
 	public function __construct(
 		Client $client,
 		Lifecycle $lifecycle,
@@ -69,7 +76,8 @@ final class Plugin {
 		?Announcements $announcements = null,
 		?AnnouncementNotices $announcement_notices = null,
 		?License $license = null,
-		?LicenseForm $license_form = null
+		?LicenseForm $license_form = null,
+		$product_name = null
 	) {
 		$this->client               = $client;
 		$this->lifecycle            = $lifecycle;
@@ -82,6 +90,7 @@ final class Plugin {
 		$this->announcement_notices = $announcement_notices;
 		$this->license              = $license;
 		$this->license_form         = $license_form;
+		$this->product_name         = null !== $product_name ? (string) $product_name : null;
 	}
 
 	/**
@@ -228,5 +237,46 @@ final class Plugin {
 	 */
 	public function license_form() {
 		return $this->license_form;
+	}
+
+	/**
+	 * Phase 8: the complete, one-call license admin page — registers its
+	 * own menu item, renders every state, and handles the Activate/
+	 * Deactivate submission. Nothing to combine with your own settings
+	 * page for; if you want that instead, use license_form() above.
+	 *
+	 *     $sdk->license_page( array(
+	 *         'parent'       => 'options-general.php',
+	 *         'purchase_url' => 'https://example.com/pricing',
+	 *         'renew_url'    => 'https://example.com/account',
+	 *         'support_url'  => 'https://example.com/support',
+	 *         'notice'       => true,
+	 *     ) );
+	 *
+	 * Safe to call more than once with different args — the underlying
+	 * page is built once and re-registered; this is not a documented
+	 * use case, just not something that fatals if it happens.
+	 *
+	 * @param array<string, mixed> $args See Admin\LicensePage::register().
+	 * @return LicensePage|null Null only when built without licensing.
+	 */
+	public function license_page( array $args = array() ) {
+		if ( null === $this->license ) {
+			return null;
+		}
+
+		if ( null === $this->license_page ) {
+			$options = array();
+
+			if ( isset( $args['product_name'] ) ) {
+				$options['product_name'] = $args['product_name'];
+			} elseif ( null !== $this->product_name ) {
+				$options['product_name'] = $this->product_name;
+			}
+
+			$this->license_page = new LicensePage( $this->license, $options );
+		}
+
+		return $this->license_page->register( $args );
 	}
 }

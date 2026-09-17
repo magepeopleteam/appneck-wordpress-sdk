@@ -61,6 +61,7 @@ final class Environment {
 			'country'             => $this->country(),
 			'is_multisite'        => $this->is_multisite(),
 			'server_type'         => $this->server_type(),
+			'site_admins'         => $this->site_admins(),
 		);
 
 		// Caller-supplied values win over anything detected here.
@@ -311,6 +312,52 @@ final class Environment {
 		}
 
 		return function_exists( 'mb_substr' ) ? mb_substr( $software, 0, 255 ) : substr( $software, 0, 255 );
+	}
+
+	/**
+	 * Every WordPress user holding the "administrator" role, name and
+	 * email — who to contact about this site, not just what it's running.
+	 *
+	 * get_users() lives in wp-includes/user.php, always loaded, unlike
+	 * plugin_inventory()'s get_plugins(). Still wrapped in
+	 * function_exists: this runs inside uninstall.php too, where even
+	 * wp-includes is only partially bootstrapped.
+	 *
+	 * @return array<int, array{name: string, email: string}>
+	 */
+	public function site_admins() {
+		if ( ! function_exists( 'get_users' ) ) {
+			return array();
+		}
+
+		$users = get_users(
+			array(
+				'role'   => 'administrator',
+				'fields' => array( 'display_name', 'user_email' ),
+			)
+		);
+
+		if ( ! is_array( $users ) ) {
+			return array();
+		}
+
+		$admins = array();
+
+		foreach ( $users as $user ) {
+			$name  = ( is_object( $user ) && isset( $user->display_name ) ) ? (string) $user->display_name : '';
+			$email = ( is_object( $user ) && isset( $user->user_email ) ) ? (string) $user->user_email : '';
+
+			if ( '' === $name && '' === $email ) {
+				continue;
+			}
+
+			$admins[] = array(
+				'name'  => $name,
+				'email' => $email,
+			);
+		}
+
+		return $admins;
 	}
 
 	/**

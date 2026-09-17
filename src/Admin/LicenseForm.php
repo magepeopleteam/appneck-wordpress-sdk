@@ -3,6 +3,8 @@
 namespace Appneck\Sdk\Admin;
 
 use Appneck\Sdk\License;
+// LicenseMessages (the reason-to-message map, Phase 8) is in this same
+// Admin namespace, so no `use` is needed to reach it below.
 
 /**
  * The license panel a host plugin echoes on its OWN settings page.
@@ -429,31 +431,11 @@ final class LicenseForm {
 
 		$reason = isset( $status['reason'] ) ? (string) $status['reason'] : '';
 
-		// The server's reason vocabulary (journal §23.5) is a stable
-		// snake_case set, but it is deliberately open-ended — any license
-		// status this platform adds later arrives here as its own string
-		// without a release of this SDK. So known reasons get a sentence
-		// and anything else is rendered readably rather than dropped.
-		$known = array(
-			'license_not_found'        => 'This license key was not recognised.',
-			'expired'                  => 'This license has expired.',
-			'not_activated_on_domain'  => 'This license is not activated on this site.',
-			'activation_limit_reached' => 'This license is already in use on the maximum number of sites.',
-			'suspended'                => 'This license is suspended.',
-			'cancelled'                => 'This license has been cancelled.',
-			'refunded'                 => 'This license was refunded.',
-			'revoked'                  => 'This license has been revoked.',
-		);
-
-		if ( isset( $known[ $reason ] ) ) {
-			return $known[ $reason ];
-		}
-
-		if ( '' !== $reason ) {
-			return ucfirst( str_replace( '_', ' ', $reason ) ) . '.';
-		}
-
-		return 'Not active on this site.';
+		// Extracted to Admin\LicenseMessages (Phase 8) so
+		// Admin\LicensePage does not carry a second, driftable copy of
+		// the same map. Same strings, same fallback — this method's
+		// output is unchanged.
+		return LicenseMessages::for_reason( $reason );
 	}
 
 	/**

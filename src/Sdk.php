@@ -173,7 +173,12 @@ final class Sdk {
 			$announcements,
 			$announcementNotice,
 			$license,
-			$license_form
+			$license_form,
+			// Phase 8: license_page()'s 'product_name' fallback, so a
+			// developer who never passes one still gets the plugin's own
+			// name rather than the generic "This plugin" both LicenseForm
+			// and LicenseNotice fall back to when nothing at all is known.
+			$plugin_name
 		);
 	}
 

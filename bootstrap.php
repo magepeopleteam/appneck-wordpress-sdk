@@ -57,7 +57,12 @@ $appneck_sdk_classes = array(
 	'Appneck\\Sdk\\Announcements'                     => $appneck_sdk_src . '/Announcements.php',
 	'Appneck\\Sdk\\Admin\\AnnouncementNotices'        => $appneck_sdk_src . '/Admin/AnnouncementNotices.php',
 	'Appneck\\Sdk\\License'                           => $appneck_sdk_src . '/License.php',
+	// Phase 8's own reason-to-message map, loaded before both of the
+	// classes below that call it.
+	'Appneck\\Sdk\\Admin\\LicenseMessages'            => $appneck_sdk_src . '/Admin/LicenseMessages.php',
 	'Appneck\\Sdk\\Admin\\LicenseForm'                => $appneck_sdk_src . '/Admin/LicenseForm.php',
+	'Appneck\\Sdk\\Admin\\LicenseNotice'              => $appneck_sdk_src . '/Admin/LicenseNotice.php',
+	'Appneck\\Sdk\\Admin\\LicensePage'                => $appneck_sdk_src . '/Admin/LicensePage.php',
 	'Appneck\\Sdk\\Lifecycle'                         => $appneck_sdk_src . '/Lifecycle.php',
 	'Appneck\\Sdk\\Plugin'                            => $appneck_sdk_src . '/Plugin.php',
 	'Appneck\\Sdk\\Sdk'                               => $appneck_sdk_src . '/Sdk.php',

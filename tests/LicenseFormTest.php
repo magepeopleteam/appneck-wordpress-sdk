@@ -95,10 +95,11 @@ class LicenseFormTest extends TestCase {
 		$this->store->write(
 			array_merge(
 				array(
-					'license_key'  => self::KEY,
-					'valid'        => true,
-					'status'       => 'active',
-					'validated_at' => time(),
+					'license_key'      => self::KEY,
+					'valid'            => true,
+					'status'           => 'active',
+					'validated_domain' => 'example.test',
+					'validated_at'     => time(),
 				),
 				$state
 			)
@@ -156,7 +157,10 @@ class LicenseFormTest extends TestCase {
 			)
 		);
 
-		$this->assertStringContainsString( 'not activated on this site', $this->render() );
+		$html = $this->render();
+
+		$this->assertStringContainsString( 'not activated on this domain', $html );
+		$this->assertStringContainsString( 'activate it here', $html );
 	}
 
 	/**
