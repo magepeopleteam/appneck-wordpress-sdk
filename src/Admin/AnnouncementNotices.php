@@ -284,28 +284,27 @@ final class AnnouncementNotices {
 			$this->render_one( $announcement );
 			++$printed;
 		}
+
+		$this->render_notice_style();
 	}
 
 	/** @param array<string, mixed> $announcement */
 	private function render_one( array $announcement ) {
-		$class = isset( self::NOTICE_CLASSES[ $announcement['type'] ] )
-			? self::NOTICE_CLASSES[ $announcement['type'] ]
-			// An unknown type from a newer server. Neutral rather than
-			// guessed at — and never the urgent one.
-			: 'notice-info';
+		$class = $this->notice_class( $announcement['type'] );
 
-		echo '<div class="notice ' . esc_attr( $class ) . '">';
-		echo '<p><strong>' . esc_html( $announcement['title'] ) . '</strong></p>';
+		echo '<div class="notice ' . esc_attr( $class ) . ' appneck-sdk-announcement">';
+		echo $this->notice_icon( $announcement['type'] ); // phpcs:ignore -- static, non-user markup.
+		echo '<div class="appneck-sdk-announcement__content">';
+		echo '<p class="appneck-sdk-announcement__title">' . esc_html( $announcement['title'] ) . '</p>';
 
 		if ( '' !== $announcement['body'] ) {
 			// esc_html FIRST, then nl2br on the escaped string, so line
 			// breaks survive without any tag from the server surviving with
 			// them. journal §12.2 makes this content display-only; letting
 			// remote HTML into wp-admin would quietly undo that.
-			echo '<p>' . nl2br( esc_html( $announcement['body'] ) ) . '</p>';
+			echo '<p class="appneck-sdk-announcement__body">' . nl2br( esc_html( $announcement['body'] ) ) . '</p>';
 		}
 
-		echo '<p>';
 		echo '<form method="post" action="' . esc_url( $this->post_url() ) . '">';
 		echo '<input type="hidden" name="action" value="' . esc_attr( $this->action() ) . '" />';
 		echo '<input type="hidden" name="' . esc_attr( self::FIELD ) . '" value="' . esc_attr( $announcement['id'] ) . '" />';
@@ -319,10 +318,9 @@ final class AnnouncementNotices {
 		// box for that page view, which is the opposite of what a stored
 		// dismissal means. Two dismiss controls where one is a lie is
 		// worse than one that is honest.
-		echo '<button type="submit" class="button-link">' . esc_html( 'Dismiss' ) . '</button>';
+		echo '<button type="submit" class="appneck-sdk-announcement__dismiss">' . esc_html( 'Dismiss' ) . '</button>';
 		echo '</form>';
-		echo '</p>';
-
+		echo '</div>';
 		echo '</div>';
 	}
 
@@ -398,19 +396,83 @@ final class AnnouncementNotices {
 
 	/** @param array<string, mixed> $announcement */
 	private function render_notice_for_ajax( array $announcement ) {
-		$class = isset( self::NOTICE_CLASSES[ $announcement['type'] ] )
-			? self::NOTICE_CLASSES[ $announcement['type'] ]
-			: 'notice-info';
+		$class = $this->notice_class( $announcement['type'] );
 
 		echo '<div class="notice ' . esc_attr( $class ) . ' appneck-sdk-announcement" data-appneck-announcement-id="' . esc_attr( $announcement['id'] ) . '">';
-		echo '<p><strong>' . esc_html( $announcement['title'] ) . '</strong></p>';
+		echo $this->notice_icon( $announcement['type'] ); // phpcs:ignore -- static, non-user markup.
+		echo '<div class="appneck-sdk-announcement__content">';
+		echo '<p class="appneck-sdk-announcement__title">' . esc_html( $announcement['title'] ) . '</p>';
 
 		if ( '' !== $announcement['body'] ) {
-			echo '<p>' . nl2br( esc_html( $announcement['body'] ) ) . '</p>';
+			echo '<p class="appneck-sdk-announcement__body">' . nl2br( esc_html( $announcement['body'] ) ) . '</p>';
 		}
 
-		echo '<p><button type="button" class="button-link" data-appneck-dismiss="' . esc_attr( $announcement['id'] ) . '">' . esc_html( 'Dismiss' ) . '</button></p>';
+		echo '<button type="button" class="appneck-sdk-announcement__dismiss" data-appneck-dismiss="' . esc_attr( $announcement['id'] ) . '">' . esc_html( 'Dismiss' ) . '</button>';
 		echo '</div>';
+		echo '</div>';
+	}
+
+	/** @param string $type */
+	private function notice_class( $type ) {
+		return isset( self::NOTICE_CLASSES[ $type ] )
+			? self::NOTICE_CLASSES[ $type ]
+			// An unknown type from a newer server. Neutral rather than
+			// guessed at — and never the urgent one.
+			: 'notice-info';
+	}
+
+	/**
+	 * A small icon per type, matching what each one is actually telling
+	 * the site owner — a shield for something to act on, a refresh arrow
+	 * for a routine update, a spark for a new feature, a tag for a
+	 * discount — rather than four identical boxes distinguished only by
+	 * a thin left border. Static markup, no user data, so no escaping
+	 * is needed; `aria-hidden` keeps it decorative (the type is already
+	 * conveyed by the notice's own colour and, for a screen reader, by
+	 * its content).
+	 *
+	 * @param string $type
+	 */
+	private function notice_icon( $type ) {
+		$icons = array(
+			'security' => '<svg viewBox="0 0 24 24" fill="none"><path d="M12 3l7 3v5.5c0 5-3.1 8-7 9.5-3.9-1.5-7-4.5-7-9.5V6l7-3z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M9 12.3l2.1 2.1L15.3 10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+			'update'   => '<svg viewBox="0 0 24 24" fill="none"><path d="M4.5 12a7.5 7.5 0 0 1 12.6-5.5M19.5 12a7.5 7.5 0 0 1-12.6 5.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="M17 3.5v3.5h-3.5M7 20.5V17h3.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+			'feature'  => '<svg viewBox="0 0 24 24" fill="none"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M17.5 15.5 20 18M18 6l-2.5 2.5M8.5 15.5 6 18" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><circle cx="12" cy="12" r="2.5" stroke="currentColor" stroke-width="1.6"/></svg>',
+			'discount' => '<svg viewBox="0 0 24 24" fill="none"><path d="M4 12.5V6a1 1 0 0 1 1-1h6.5a1 1 0 0 1 .7.3l7 7a1 1 0 0 1 0 1.4l-6.5 6.5a1 1 0 0 1-1.4 0l-7-7a1 1 0 0 1-.3-.7z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><circle cx="8.2" cy="8.2" r="1.3" stroke="currentColor" stroke-width="1.4"/></svg>',
+		);
+
+		$icon = isset( $icons[ $type ] ) ? $icons[ $type ] : '<svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="8.5" stroke="currentColor" stroke-width="1.6"/><path d="M12 10.5v6M12 7.5v.01" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>';
+
+		return '<div class="appneck-sdk-announcement__icon" aria-hidden="true">' . $icon . '</div>';
+	}
+
+	/**
+	 * Printed once per page — inside render_one()/render() for the
+	 * original opt-in path (only when there is something to show), and
+	 * from print_refresh_script() for the default global path, since
+	 * that runs on admin_footer exactly once per page load and, unlike
+	 * the announcements container, is never overwritten by an AJAX
+	 * refresh's innerHTML swap.
+	 */
+	private function render_notice_style() {
+		echo '<style>
+.appneck-sdk-announcement{display:flex!important;align-items:flex-start;gap:12px;padding:14px 16px!important;border-radius:8px;box-shadow:0 1px 2px rgba(16,20,26,.05)}
+.appneck-sdk-announcement__icon{flex:0 0 auto;width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;margin-top:1px}
+.appneck-sdk-announcement__icon svg{width:17px;height:17px}
+.appneck-sdk-announcement__content{flex:1 1 auto;min-width:0;padding-top:1px}
+.appneck-sdk-announcement__title{margin:0 0 3px!important;font-size:14px;font-weight:600;color:#1d2327}
+.appneck-sdk-announcement__body{margin:0 0 8px!important;font-size:13px;color:#3c434a;line-height:1.55}
+.appneck-sdk-announcement__dismiss{background:none!important;border:0!important;padding:0!important;margin:0!important;font-size:12.5px;color:#787c82;cursor:pointer;text-decoration:underline}
+.appneck-sdk-announcement__dismiss:hover{color:#1d2327}
+.appneck-sdk-announcement.notice-error{background:#fef2f2}
+.appneck-sdk-announcement.notice-error .appneck-sdk-announcement__icon{background:#fee2e2;color:#dc2626}
+.appneck-sdk-announcement.notice-warning{background:#fffbeb}
+.appneck-sdk-announcement.notice-warning .appneck-sdk-announcement__icon{background:#fef3c7;color:#b45309}
+.appneck-sdk-announcement.notice-info{background:#eff6ff}
+.appneck-sdk-announcement.notice-info .appneck-sdk-announcement__icon{background:#dbeafe;color:#2563eb}
+.appneck-sdk-announcement.notice-success{background:#f0fdf4}
+.appneck-sdk-announcement.notice-success .appneck-sdk-announcement__icon{background:#dcfce7;color:#15803d}
+</style>';
 	}
 
 	/**
@@ -440,6 +502,13 @@ final class AnnouncementNotices {
 			'pollIntervalMs'  => self::POLL_INTERVAL_SECONDS * 1000,
 			'idleTimeoutMs'   => self::IDLE_TIMEOUT_SECONDS * 1000,
 		);
+
+		// Printed here, once per page (admin_footer), rather than inside
+		// render_from_cache_only()'s container — that container's
+		// innerHTML is replaced wholesale on every AJAX refresh/poll, so
+		// a <style> tag placed inside it would vanish the first time an
+		// urgent notice arrived and get silently re-added forever after.
+		$this->render_notice_style();
 
 		$json = function_exists( 'wp_json_encode' ) ? wp_json_encode( $cfg ) : json_encode( $cfg );
 

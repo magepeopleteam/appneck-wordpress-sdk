@@ -138,8 +138,8 @@ class AnnouncementNoticesTest extends TestCase {
 
 		$this->assertStringContainsString( 'Security release 2.4.1', $html );
 		$this->assertStringContainsString( 'Bulk export is here', $html );
-		$this->assertStringContainsString( 'class="notice notice-error"', $html );
-		$this->assertStringContainsString( 'class="notice notice-info"', $html );
+		$this->assertStringContainsString( 'class="notice notice-error appneck-sdk-announcement"', $html );
+		$this->assertStringContainsString( 'class="notice notice-info appneck-sdk-announcement"', $html );
 	}
 
 	public function test_the_type_decides_the_notice_class(): void {
@@ -168,8 +168,15 @@ class AnnouncementNoticesTest extends TestCase {
 
 		$html = $this->render();
 
-		$this->assertStringContainsString( 'notice-info', $html );
-		$this->assertStringNotContainsString( 'notice-error', $html );
+		// Checked against the notice div's own class attribute (space
+		// before the type class, matching how the attribute is actually
+		// written) rather than anywhere in the string — the style
+		// block's CSS necessarily mentions every type's class name
+		// (concatenated with a dot, no space) so it can style whichever
+		// one is actually present, and that must not be mistaken for
+		// this one rendering as urgent.
+		$this->assertStringContainsString( 'class="notice notice-info appneck-sdk-announcement"', $html );
+		$this->assertStringNotContainsString( 'class="notice notice-error', $html );
 	}
 
 	public function test_the_most_urgent_announcement_prints_first(): void {
