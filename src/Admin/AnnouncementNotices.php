@@ -503,7 +503,7 @@ final class AnnouncementNotices {
 	 */
 	private function render_notice_style() {
 		echo '<style>
-.appneck-sdk-announcement{display:flex!important;align-items:flex-start;gap:14px;padding:16px 18px!important;border-radius:10px;border-left-width:0!important;box-shadow:0 1px 3px rgba(16,20,26,.08)}
+.appneck-sdk-announcement{display:flex!important;align-items:flex-start;gap:14px;margin:0 0 16px!important;padding:16px 18px!important;border-radius:10px;border-left-width:0!important;box-shadow:0 1px 3px rgba(16,20,26,.08)}
 .appneck-sdk-announcement__icon{flex:0 0 auto;width:36px;height:36px;border-radius:50%;display:flex;align-items:center;justify-content:center;margin-top:1px;color:#fff;box-shadow:0 2px 5px rgba(16,20,26,.18)}
 .appneck-sdk-announcement__icon svg{width:18px;height:18px}
 .appneck-sdk-announcement__content{flex:1 1 auto;min-width:0;padding-top:2px}
