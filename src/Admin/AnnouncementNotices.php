@@ -395,11 +395,36 @@ final class AnnouncementNotices {
 		return false === $html ? '' : $html;
 	}
 
-	/** @param array<string, mixed> $announcement */
+	/**
+	 * Deliberately NOT the literal `notice` class core's own
+	 * `wp-admin/js/common.js` looks for (`div.updated, div.error,
+	 * div.notice`) — only `notice-error`/`-warning`/`-info`/`-success`,
+	 * which this component's own CSS already keys off and which core's
+	 * selector does not match (it looks for the exact `notice` token,
+	 * not a `notice-*` prefix).
+	 *
+	 * A real bug shipped here once: with the literal `notice` class
+	 * present, core's relocation script — which runs exactly ONCE, on
+	 * page ready — would grab this element and move it to right after
+	 * the screen's `<h1>`. The page-load background refresh
+	 * (print_refresh_script()'s unconditional `refresh()` call) then
+	 * replaces THIS element's parent container's innerHTML with a
+	 * fresh copy from the server. If that AJAX response arrives after
+	 * core's one-time relocation already ran, the ORIGINAL notice is
+	 * already sitting after the `<h1>`, and the freshly-injected copy
+	 * lands back in the container's original, pre-relocation position
+	 * — two visible copies of the same notice, in two different
+	 * places, appearing only once the refresh resolves (which is why
+	 * it looked instant-then-delayed rather than a same-request bug).
+	 * Removing the literal `notice` token means core never touches
+	 * this element at all, so there is nothing left to race.
+	 *
+	 * @param array<string, mixed> $announcement
+	 */
 	private function render_notice_for_ajax( array $announcement ) {
 		$class = $this->notice_class( $announcement['type'] );
 
-		echo '<div class="notice ' . esc_attr( $class ) . ' appneck-sdk-announcement" data-appneck-announcement-id="' . esc_attr( $announcement['id'] ) . '">';
+		echo '<div class="' . esc_attr( $class ) . ' appneck-sdk-announcement" data-appneck-announcement-id="' . esc_attr( $announcement['id'] ) . '">';
 		echo $this->notice_icon( $announcement['type'] ); // phpcs:ignore -- static, non-user markup.
 		echo '<div class="appneck-sdk-announcement__content">';
 		echo '<span class="appneck-sdk-announcement__badge">' . esc_html( $this->notice_label( $announcement['type'] ) ) . '</span>';

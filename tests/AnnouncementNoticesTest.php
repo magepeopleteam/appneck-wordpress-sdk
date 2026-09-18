@@ -569,6 +569,27 @@ class AnnouncementNoticesTest extends TestCase {
 		$this->assertNull( $this->notices->handle_refresh_ajax() );
 	}
 
+	/**
+	 * A real bug: this markup used to carry the literal `notice` class
+	 * WordPress core's own wp-admin/js/common.js relocates (once, on
+	 * page ready) to right after the screen's <h1>. Because this HTML
+	 * is injected via AJAX on every page-load refresh, a response
+	 * arriving after core's one-time relocation already ran left the
+	 * ORIGINAL notice sitting after the <h1> and the FRESHLY-injected
+	 * one sitting in the container's original position -- two visible
+	 * copies of the same notice. Asserting against the AJAX response's
+	 * own markup, not just render()'s (the unaffected opt-in path,
+	 * covered by the class="notice ..." tests above).
+	 */
+	public function test_the_ajax_refresh_markup_never_carries_the_literal_notice_class_core_relocates(): void {
+		$this->seed();
+
+		$result = $this->notices->handle_refresh_ajax();
+
+		$this->assertStringNotContainsString( '"notice ', $result['html'], 'core relocates any literal "notice" class once, splitting this element from a later AJAX-refreshed copy' );
+		$this->assertStringContainsString( 'notice-error appneck-sdk-announcement', $result['html'], 'the notice-error class itself must still be present for this component\'s own styling' );
+	}
+
 	public function test_refresh_ajax_fetches_when_stale_and_returns_html(): void {
 		$this->realtime_config->note_version( 1 );
 		$this->realtime_config->note_version( 2 ); // marks stale
