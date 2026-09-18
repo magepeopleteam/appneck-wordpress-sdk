@@ -530,6 +530,77 @@ class TelemetryTest extends TestCase {
 	}
 
 	// -----------------------------------------------------------------
+	// config_version hand-off to RealtimeConfig
+	// -----------------------------------------------------------------
+
+	private function config_version_option(): string {
+		return 'appneck_sdk_config_version_' . substr( hash( 'sha256', self::API_KEY ), 0, 32 );
+	}
+
+	public function test_a_successful_flush_hands_the_version_to_realtime_config(): void {
+		require_once __DIR__ . '/wp-option-polyfill.php';
+		$GLOBALS['appneck_test_options'] = array();
+
+		$telemetry = $this->telemetry();
+		$telemetry->track( 'a' );
+
+		$telemetry->set_realtime_config( new \Appneck\Sdk\RealtimeConfig( substr( hash( 'sha256', self::API_KEY ), 0, 32 ) ) );
+
+		$this->transport->queue(
+			Response::from_http(
+				202,
+				array(),
+				json_encode(
+					array(
+						'accepted_count'  => 1,
+						'rejected_count'  => 0,
+						'accepted'        => array( array( 'index' => 0 ) ),
+						'rejected'        => array(),
+						'config_version'  => 7,
+					)
+				)
+			)
+		);
+
+		$telemetry->flush();
+
+		$this->assertSame( 7, $GLOBALS['appneck_test_options'][ $this->config_version_option() ] );
+	}
+
+	/** No wired RealtimeConfig must not be a fatal error — it is optional, per set_realtime_config's own doc. */
+	public function test_a_flush_with_no_realtime_config_wired_does_not_error(): void {
+		$telemetry = $this->telemetry();
+		$telemetry->track( 'a' );
+
+		$this->transport->queue( $this->accept_all( 1 ) );
+
+		$telemetry->flush();
+
+		$this->assertSame( 0, $this->queue->count() );
+	}
+
+	/**
+	 * Only a genuinely successful (202) flush is evidence of anything —
+	 * a rate-limited or forbidden response says nothing about whether the
+	 * product's config changed, so RealtimeConfig must not be told
+	 * anything.
+	 */
+	public function test_a_non_202_response_never_reaches_realtime_config(): void {
+		require_once __DIR__ . '/wp-option-polyfill.php';
+		$GLOBALS['appneck_test_options'] = array();
+
+		$telemetry = $this->telemetry();
+		$telemetry->track( 'a' );
+
+		$telemetry->set_realtime_config( new \Appneck\Sdk\RealtimeConfig( substr( hash( 'sha256', self::API_KEY ), 0, 32 ) ) );
+
+		$this->transport->queue( Response::from_http( 503, array(), '' ) );
+		$telemetry->flush();
+
+		$this->assertArrayNotHasKey( $this->config_version_option(), $GLOBALS['appneck_test_options'] );
+	}
+
+	// -----------------------------------------------------------------
 	// Interval
 	// -----------------------------------------------------------------
 

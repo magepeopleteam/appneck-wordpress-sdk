@@ -54,10 +54,21 @@ final class Survey {
 	/** @var string */
 	private $key;
 
-	public function __construct( Client $client, ?Logger $logger = null ) {
-		$this->client = $client;
-		$this->logger = null !== $logger ? $logger : new NullLogger();
-		$this->key    = substr( hash( 'sha256', $client->config()->api_key() ), 0, 32 );
+	/** @var RealtimeConfig|null */
+	private $realtime_config;
+
+	/**
+	 * @param RealtimeConfig|null $realtime_config The shared circuit
+	 *        breaker (13-realtime-config-delivery.md). Optional and
+	 *        defaulted so existing callers keep working unchanged; a
+	 *        survey constructed without one simply never skips the
+	 *        network on an open circuit it has no way to know about.
+	 */
+	public function __construct( Client $client, ?Logger $logger = null, ?RealtimeConfig $realtime_config = null ) {
+		$this->client          = $client;
+		$this->logger          = null !== $logger ? $logger : new NullLogger();
+		$this->key             = substr( hash( 'sha256', $client->config()->api_key() ), 0, 32 );
+		$this->realtime_config = $realtime_config;
 	}
 
 	// -----------------------------------------------------------------
@@ -93,6 +104,16 @@ final class Survey {
 			return array();
 		}
 
+		// The circuit breaker (13-realtime-config-delivery.md, shared
+		// with the announcements refresh and the config poll): after
+		// repeated failures elsewhere, skip the network entirely rather
+		// than making the one person standing at the Deactivate modal
+		// wait out a doomed 3-second timeout. Falls back to whatever is
+		// cached, however stale — see stale_cached_questions().
+		if ( null !== $this->realtime_config && $this->realtime_config->is_open() ) {
+			return $this->stale_cached_questions();
+		}
+
 		$response = $this->client->get( '/sdk/v1/survey-questions' );
 
 		if ( ! $response->ok() ) {
@@ -104,9 +125,24 @@ final class Survey {
 				)
 			);
 
-			// Also not cached. A 500 or a dropped connection is not
-			// evidence that this product has no survey.
-			return array();
+			if ( null !== $this->realtime_config ) {
+				$this->realtime_config->record_failure(
+					$response->is_rate_limited() ? $response->rate_limit()->retry_after() : null
+				);
+			}
+
+			// Falls back to the LAST cached answer, however stale, rather
+			// than an empty result — a timeout or an outage is not
+			// evidence that this product has no survey, and the site
+			// owner standing at the modal right now is better served by
+			// yesterday's questions than by none at all. Genuinely
+			// nothing cached still means an empty array, which is what
+			// tells the modal to let deactivation proceed unblocked.
+			return $this->stale_cached_questions();
+		}
+
+		if ( null !== $this->realtime_config ) {
+			$this->realtime_config->record_success();
 		}
 
 		$questions = $this->normalize_questions( $response->get( 'questions', array() ) );
@@ -396,17 +432,9 @@ final class Survey {
 
 	/** @return array<int, array<string, mixed>>|null Null when absent or stale. */
 	private function cached_questions() {
-		if ( ! function_exists( 'get_option' ) ) {
-			return null;
-		}
+		$stored = $this->stored_cache();
 
-		$stored = get_option( $this->option_name(), null );
-
-		if ( ! is_array( $stored ) || ! isset( $stored['fetched_at'], $stored['questions'] ) ) {
-			return null;
-		}
-
-		if ( ! is_array( $stored['questions'] ) ) {
+		if ( null === $stored ) {
 			return null;
 		}
 
@@ -415,6 +443,37 @@ final class Survey {
 		}
 
 		return $stored['questions'];
+	}
+
+	/**
+	 * The fallback for a failed or circuit-skipped fetch: whatever was
+	 * last cached, with NO TTL check at all. CACHE_TTL governs whether a
+	 * healthy fetch bothers re-asking; it has no bearing on whether an
+	 * unhealthy one may still use what it has. An empty array here means
+	 * genuinely nothing has ever been cached, which is the one case the
+	 * modal is meant to read as "let deactivation proceed".
+	 *
+	 * @return array<int, array<string, mixed>>
+	 */
+	private function stale_cached_questions() {
+		$stored = $this->stored_cache();
+
+		return null === $stored ? array() : $stored['questions'];
+	}
+
+	/** @return array{fetched_at: int, questions: array<int, array<string, mixed>>}|null */
+	private function stored_cache() {
+		if ( ! function_exists( 'get_option' ) ) {
+			return null;
+		}
+
+		$stored = get_option( $this->option_name(), null );
+
+		if ( ! is_array( $stored ) || ! isset( $stored['fetched_at'], $stored['questions'] ) || ! is_array( $stored['questions'] ) ) {
+			return null;
+		}
+
+		return $stored;
 	}
 
 	/** @param array<int, array<string, mixed>> $questions */
@@ -435,7 +494,12 @@ final class Survey {
 		);
 	}
 
-	/** Called at uninstall — the cached questions are the plugin's data too. */
+	/**
+	 * Called at uninstall — the cached questions are the plugin's data
+	 * too. config_version-driven staleness is now handled centrally by
+	 * RealtimeConfig, which owns its own forget(); this class no longer
+	 * stores a marker of its own (13-realtime-config-delivery.md §6.2).
+	 */
 	public function forget() {
 		if ( function_exists( 'delete_option' ) ) {
 			delete_option( $this->option_name() );

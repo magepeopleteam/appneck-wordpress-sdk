@@ -487,6 +487,13 @@ Permanently-invalid events are dropped rather than retried: they can never
 become valid, and keeping them blocks the queue behind events that can
 never leave it.
 
+Every `202` also carries a `config_version` field the SDK reads to notice
+when an org admin has changed announcements or survey questions — nothing
+you need to act on; it feeds the realtime-config-delivery machinery covered
+under Announcements below. Registration and status responses carry it too.
+A server that predates this field, or a response missing it for any reason,
+is treated the same as "no change" — never an error.
+
 ---
 
 ## Consent
@@ -676,13 +683,18 @@ so it cannot render a notice. Holding the modal open to apologise makes our
 failure into their delay. So the failure goes to the `Logger` (opt-in) and
 nowhere else.
 
-### Questions are cached
+### Questions are fetched live, not cached
 
-Fetched from `GET /sdk/v1/survey-questions` and cached for 12 hours,
-including the "no survey configured" answer — they are needed at the instant
-of a click, which is the worst moment to make a network call someone is
-waiting on, and the empty answer is the common case. A *failed* fetch is not
-cached: a 500 is not evidence that your product has no survey.
+Fetched from `GET /sdk/v1/survey-questions` **at the moment the modal opens**
+— never from a stale cache. The modal itself never waits on this: it appears
+instantly, then shows a brief loading state while the fetch runs, with a
+3-second timeout. If the fetch fails, times out, or the SDK's internal
+circuit breaker is already open from repeated recent failures, it falls back
+instantly to whatever was last successfully fetched on this site — and if
+nothing has ever been fetched at all, deactivation simply proceeds with no
+survey rather than trapping the site owner in a broken modal. An edit made in
+the Org Panel is therefore visible to the very next click, on any site — not
+"eventually, once the cache expires."
 
 ### Validation happens twice, on purpose
 
@@ -715,17 +727,36 @@ not an authoring tool. To publish, schedule, or retract an announcement, do
 that in the Org Panel — the SDK's job starts at fetching what's published
 there.
 
-Fetching and caching is automatic; **where they display is up to you**,
-because an announcement from your product has no business on another
-plugin's screen:
+One authoring option is worth knowing about even though it's not a code
+change: marking an announcement **urgent** in the Org Panel is a
+delivery-speed setting, not a content category. It's a separate axis from
+`type` (security/feature/discount/update) — an urgent discount and a
+non-urgent security notice are both real combinations. Urgent reaches an
+already-open wp-admin tab within about a minute (see the 60-second poll
+below); everything else waits for that site's next page load, which is
+already automatic.
+
+**Rendering is now fully automatic too.** `Sdk::bootstrap()` calls
+`render_globally()` for you: announcements print on every wp-admin page for
+any `manage_options` user, kept fresh by a background request after the page
+has already painted, with no reload needed when something changes. There is
+nothing left to call for the standard case.
+
+The original, narrower methods are still there if you deliberately want that
+instead — one specific screen, no background refresh between page loads:
 
 ```php
-// once, at bootstrap — printed only on that one screen
+// one screen only, no automatic background refresh
 $sdk->announcement_notices()->render_on_screen( 'settings_page_acme' );
 
 // or call it directly inside your own settings page callback
 $sdk->announcement_notices()->render();
 ```
+
+> ⚠️ Don't call either of these **in addition to** the automatic default —
+> `bootstrap()` already wired the global version, so doing both prints the
+> same announcement twice on whichever screen `render_on_screen()`/`render()`
+> targets.
 
 Either way it prints **nothing at all** when there is nothing to show — no
 empty container — so it is safe to call unconditionally.
@@ -746,26 +777,36 @@ doesn't have. Consent governs data collected *from* a site; this is content
 sent *to* it, and someone who declined telemetry has not asked to stop being
 told about a security release.
 
-### No second cron schedule
+### Two refresh paths now, not one
 
-The refresh hangs off the **existing** heartbeat tick (`appneck_sdk_flush`,
-15 minutes by default) as one more listener — there is no announcements
-schedule to create, clear or reason about. Reading is pure cache, so
-rendering your settings page never waits on the network.
+The original cron-driven refresh still exists unchanged — it hangs off the
+**existing** heartbeat tick (`appneck_sdk_flush`, 15 minutes by default) as
+one more listener, and there is still no announcements schedule of its own to
+create, clear or reason about.
 
-For sites where WP-Cron cannot run at all, there is one fallback: if the
-cache is over 12 hours old **and** the site owner is on your settings
-screen, one refresh is attempted, rate-limited to once an hour whether it
-succeeds or not. Never on any other admin page.
+`render_globally()` adds a second, faster path on top of it: a background
+admin-ajax request fires after every wp-admin page load (never during the
+page's own render) and refreshes if the cache is stale or older than 60
+seconds — enforced by a single-flight lock, so ten tabs or ten page loads in
+the same window still produce at most one upstream call, not ten. On top of
+that, a lightweight 60-second poll (`GET /sdk/v1/config`, the cheapest call
+this SDK makes) checks only whether anything **urgent** has appeared; a
+non-urgent change waits for the next page load rather than being pulled
+mid-session.
 
-### What a failed refresh does: nothing
+For sites where WP-Cron cannot run at all, the original fallback also still
+exists: if the cache is over 12 hours old **and** the site owner is on your
+settings screen (via `render_on_screen()`/`render()`), one refresh is
+attempted, rate-limited to once an hour whether it succeeds or not.
+
+### What a failed refresh does: nothing visible, ever
 
 | Response | Cached list |
 |---|---|
 | `200` with announcements | replaced |
 | `200` empty (all unpublished or expired) | replaced — they stop showing |
 | `403` (installation not active) | **kept** |
-| `500` / network failure | **kept** |
+| `500` / network failure / timeout | **kept** |
 
 A failed poll is not evidence that you stopped announcing anything, and
 blanking the list because a request timed out would make a security notice
@@ -773,6 +814,15 @@ vanish. Expiry is the server's job: it evaluates the validity window on
 every request, and the SDK deliberately does not re-check it locally — a
 site clock a few minutes out would otherwise hide something you chose to
 send.
+
+**A shared circuit breaker covers all of the realtime paths above** (the
+60-second poll, the page-load refresh, and the live survey-questions fetch
+covered earlier): after 3 consecutive failures, the SDK stops attempting any
+of them for about 15 minutes, then quietly tries again. Nothing about this
+is visible to the site owner — no error, no console warning, no change in
+page load time — and a self-hosted or lagging Appneck build that has never
+even deployed `GET /sdk/v1/config` degrades the same way (a 404 counts as a
+failure like any other) rather than breaking anything.
 
 ### Display
 
@@ -793,16 +843,22 @@ server is ever rendered.
 
 ### Dismissal
 
-Per announcement, stored on the site — there is nothing to tell the server,
-since this endpoint is display-only with no read tracking. The dismissal
-lives in its own option, **not** in the cached list, which is the point:
-the cache is replaced wholesale on every refresh, so a dismissal kept
-inside it would be forgotten on the next tick and the announcement would
-come back while still inside its validity window.
+Per announcement, stored on the site — the WordPress option is the **source
+of truth for what displays**, so dismissing hides a notice instantly with no
+network dependency, and it stays hidden even if Appneck is unreachable at
+that exact moment. The dismissal lives in its own option, **not** in the
+cached list, which is the point: the cache is replaced wholesale on every
+refresh, so a dismissal kept inside it would be forgotten on the next tick
+and the announcement would come back while still inside its validity window.
 
-The Dismiss control is a nonced POST gated on `manage_options`, not core's
-dismissible X — core's X is added by its own JS and only hides the box for
-that page view, which is the opposite of what a stored dismissal means.
+On the `render_globally()` path, dismissing also fires a best-effort report
+to Appneck afterwards (purely so the Org Panel can eventually show how many
+installations dismissed something instead of acting on it) — its failure is
+silent and changes nothing about what the site owner sees. On the original
+`render_on_screen()`/`render()` path, the Dismiss control is still the
+original nonced POST gated on `manage_options`, unchanged — not core's
+dismissible X, since core's X is added by its own JS and only hides the box
+for that page view, which is the opposite of what a stored dismissal means.
 
 ---
 

@@ -84,10 +84,21 @@ final class Announcements {
 	/** @var string */
 	private $key;
 
-	public function __construct( Client $client, ?Logger $logger = null ) {
-		$this->client = $client;
-		$this->logger = null !== $logger ? $logger : new NullLogger();
-		$this->key    = substr( hash( 'sha256', $client->config()->api_key() ), 0, 32 );
+	/** @var RealtimeConfig|null */
+	private $realtime_config;
+
+	/**
+	 * @param RealtimeConfig|null $realtime_config The shared circuit
+	 *        breaker (13-realtime-config-delivery.md). Optional so
+	 *        existing callers keep working; without one, refresh() has
+	 *        no way to know a circuit is open and simply always attempts
+	 *        the network, exactly as before this was introduced.
+	 */
+	public function __construct( Client $client, ?Logger $logger = null, ?RealtimeConfig $realtime_config = null ) {
+		$this->client          = $client;
+		$this->logger          = null !== $logger ? $logger : new NullLogger();
+		$this->key             = substr( hash( 'sha256', $client->config()->api_key() ), 0, 32 );
+		$this->realtime_config = $realtime_config;
 	}
 
 	public function register_hooks() {
@@ -179,6 +190,14 @@ final class Announcements {
 			return null;
 		}
 
+		// The shared circuit breaker: after repeated failures anywhere in
+		// the realtime-config feature, skip the network here too rather
+		// than adding this call's own failure to a server that is already
+		// known to be unreachable or rate-limiting.
+		if ( null !== $this->realtime_config && $this->realtime_config->is_open() ) {
+			return null;
+		}
+
 		$this->record_attempt();
 
 		$response = $this->client->get( '/sdk/v1/announcements' );
@@ -197,7 +216,18 @@ final class Announcements {
 				)
 			);
 
+			if ( null !== $this->realtime_config ) {
+				$this->realtime_config->record_failure(
+					$response->is_rate_limited() ? $response->rate_limit()->retry_after() : null
+				);
+			}
+
 			return null;
+		}
+
+		if ( null !== $this->realtime_config ) {
+			$this->realtime_config->record_success();
+			$this->realtime_config->clear_stale();
 		}
 
 		$announcements = $this->normalize( $response->get( 'announcements', array() ) );

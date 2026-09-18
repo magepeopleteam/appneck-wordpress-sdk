@@ -49,6 +49,7 @@ $appneck_sdk_classes = array(
 	'Appneck\\Sdk\\Environment'                       => $appneck_sdk_src . '/Environment.php',
 	'Appneck\\Sdk\\Client'                            => $appneck_sdk_src . '/Client.php',
 	'Appneck\\Sdk\\LicenseClient'                     => $appneck_sdk_src . '/LicenseClient.php',
+	'Appneck\\Sdk\\RealtimeConfig'                    => $appneck_sdk_src . '/RealtimeConfig.php',
 	'Appneck\\Sdk\\Telemetry'                         => $appneck_sdk_src . '/Telemetry.php',
 	'Appneck\\Sdk\\Consent'                           => $appneck_sdk_src . '/Consent.php',
 	'Appneck\\Sdk\\Admin\\ConsentNotice'              => $appneck_sdk_src . '/Admin/ConsentNotice.php',

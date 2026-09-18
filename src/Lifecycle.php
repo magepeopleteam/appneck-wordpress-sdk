@@ -94,9 +94,13 @@ final class Lifecycle {
 	/** @var Telemetry|null */
 	private $telemetry;
 
-	public function __construct( Client $client, $plugin_file = null, ?Environment $environment = null, ?Telemetry $telemetry = null ) {
-		$this->client      = $client;
-		$this->plugin_file = $plugin_file;
+	/** @var RealtimeConfig|null */
+	private $realtime_config;
+
+	public function __construct( Client $client, $plugin_file = null, ?Environment $environment = null, ?Telemetry $telemetry = null, ?RealtimeConfig $realtime_config = null ) {
+		$this->client          = $client;
+		$this->plugin_file     = $plugin_file;
+		$this->realtime_config = $realtime_config;
 		$this->environment = null !== $environment ? $environment : new Environment( $plugin_file );
 		$this->telemetry   = $telemetry;
 		$this->key         = substr( hash( 'sha256', $client->config()->api_key() ), 0, 32 );
@@ -218,6 +222,8 @@ final class Lifecycle {
 			Client::MODE_BOOTSTRAP,
 			$installation_id
 		);
+
+		$this->note_config_version( $response );
 
 		if ( ! $response->ok() ) {
 			if ( in_array( $response->status(), self::PERMANENT_FAILURE_STATUSES, true ) ) {
@@ -376,6 +382,20 @@ final class Lifecycle {
 	 * @param string $status active|deactivated|removed
 	 * @return Response|null Null when there is nothing to report.
 	 */
+	/**
+	 * config_version rides both installations/register and
+	 * installations/status (13-realtime-config-delivery.md §4) — every
+	 * response this class already receives. A response predating the
+	 * field, or a transport failure with no body at all, simply hands
+	 * note_version() nothing usable, which it already treats as
+	 * "no signal" rather than an error.
+	 */
+	private function note_config_version( Response $response ) {
+		if ( null !== $this->realtime_config ) {
+			$this->realtime_config->note_version( $response->get( 'config_version' ) );
+		}
+	}
+
 	private function report_status( $status ) {
 		// Never registered, or registration never completed: there is no
 		// installation on the server to update and nothing to sign with.
@@ -384,7 +404,10 @@ final class Lifecycle {
 			return null;
 		}
 
-		return $this->client->post( '/sdk/v1/installations/status', array( 'status' => $status ) );
+		$response = $this->client->post( '/sdk/v1/installations/status', array( 'status' => $status ) );
+		$this->note_config_version( $response );
+
+		return $response;
 	}
 
 	// -----------------------------------------------------------------

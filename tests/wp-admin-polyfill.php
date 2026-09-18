@@ -55,6 +55,12 @@ if ( ! function_exists( 'wp_nonce_field' ) ) {
 	}
 }
 
+if ( ! function_exists( 'wp_create_nonce' ) ) {
+	function wp_create_nonce( $action ) {
+		return 'nonce-for-' . $action;
+	}
+}
+
 if ( ! function_exists( 'check_admin_referer' ) ) {
 	function check_admin_referer( $action ) {
 		$GLOBALS['appneck_test_admin']['checked'][] = (string) $action;

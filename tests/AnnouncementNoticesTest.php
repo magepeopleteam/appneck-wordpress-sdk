@@ -7,6 +7,7 @@ use Appneck\Sdk\Announcements;
 use Appneck\Sdk\Client;
 use Appneck\Sdk\Config;
 use Appneck\Sdk\Http\Response;
+use Appneck\Sdk\RealtimeConfig;
 use Appneck\Sdk\Storage\ArrayCredentialStore;
 use PHPUnit\Framework\TestCase;
 
@@ -40,13 +41,21 @@ class AnnouncementNoticesTest extends TestCase {
 	/** @var array<int, string> */
 	private $redirects = array();
 
+	/** @var RealtimeConfig */
+	private $realtime_config;
+
+	/** @var Client */
+	private $fast_client;
+
 	protected function setUp(): void {
 		require_once __DIR__ . '/wp-option-polyfill.php';
 		require_once __DIR__ . '/wp-admin-polyfill.php';
+		require_once __DIR__ . '/wp-menu-polyfill.php';
 		require_once __DIR__ . '/QueueingTransport.php';
 		require_once __DIR__ . '/RecordingLogger.php';
 
-		$GLOBALS['appneck_test_options'] = array();
+		$GLOBALS['appneck_test_options']    = array();
+		$GLOBALS['appneck_test_transients'] = array();
 		appneck_test_reset_admin();
 
 		$this->transport = new QueueingTransport();
@@ -58,8 +67,11 @@ class AnnouncementNoticesTest extends TestCase {
 			$this->transport
 		);
 
-		$this->announcements = new Announcements( $client, new RecordingLogger() );
-		$this->notices       = new AnnouncementNotices( $this->announcements, self::KEY );
+		$this->realtime_config = new RealtimeConfig( self::KEY );
+		$this->fast_client     = $client;
+
+		$this->announcements = new Announcements( $client, new RecordingLogger(), $this->realtime_config );
+		$this->notices       = new AnnouncementNotices( $this->announcements, self::KEY, $this->realtime_config, $this->fast_client );
 		$this->notices->set_redirect_handler(
 			function ( $url ) {
 				$this->redirects[] = $url;
@@ -369,5 +381,326 @@ class AnnouncementNoticesTest extends TestCase {
 
 		$this->assertNull( $this->notices->handle_dismiss() );
 		$this->assertSame( array(), $this->announcements->dismissed() );
+	}
+
+	// -----------------------------------------------------------------
+	// render_globally() — the widened default (Layer 2/3, Part 5/9)
+	// -----------------------------------------------------------------
+
+	private function render_from_cache_only(): string {
+		ob_start();
+		$this->notices->render_from_cache_only();
+
+		return (string) ob_get_clean();
+	}
+
+	/**
+	 * A regression pin for a bug live E2E testing against a real
+	 * WordPress site caught and the polyfilled suite could not: an
+	 * earlier version set LOCK_TTL_SECONDS to 65 (over the 60-second
+	 * poll interval), so a lock a page-load refresh took could still be
+	 * held when the very next poll tick tried to pull a genuinely urgent
+	 * notice, silently delaying it. Nothing in a fast, sequential-call
+	 * test suite exercises real elapsed time, so this only surfaces as
+	 * an explicit invariant check.
+	 */
+	public function test_the_lock_ttl_is_shorter_than_the_poll_interval(): void {
+		$this->assertLessThan(
+			AnnouncementNotices::POLL_INTERVAL_SECONDS,
+			AnnouncementNotices::LOCK_TTL_SECONDS,
+			'a lock that outlives the poll interval can block the very next poll tick from pulling an urgent notice'
+		);
+	}
+
+	public function test_render_globally_hooks_admin_notices_and_admin_footer_globally(): void {
+		require_once __DIR__ . '/wp-hook-polyfill.php';
+		$GLOBALS['appneck_test_hooks'] = array();
+
+		$this->notices->render_globally();
+
+		$this->assertArrayHasKey( 'admin_notices', $GLOBALS['appneck_test_hooks'] );
+		$this->assertArrayHasKey( 'admin_footer', $GLOBALS['appneck_test_hooks'] );
+	}
+
+	/**
+	 * Part 3 rule 2: rendering is NEVER blocked by a network call. The
+	 * cache-only path must make literally zero requests, on any input.
+	 */
+	public function test_render_from_cache_only_never_touches_the_network(): void {
+		$this->seed();
+
+		$before = $this->transport->count();
+		$this->render_from_cache_only();
+
+		$this->assertSame( $before, $this->transport->count() );
+	}
+
+	public function test_render_from_cache_only_prints_the_container_even_when_empty(): void {
+		// Nothing seeded at all.
+		$html = $this->render_from_cache_only();
+
+		$this->assertStringContainsString( 'id="appneck-sdk-announcements-' . self::KEY . '"', $html );
+	}
+
+	public function test_render_from_cache_only_prints_visible_announcements(): void {
+		$this->seed();
+
+		$html = $this->render_from_cache_only();
+
+		$this->assertStringContainsString( 'Security release 2.4.1', $html );
+		$this->assertStringContainsString( 'data-appneck-dismiss="' . self::SECURITY_ID . '"', $html );
+	}
+
+	/**
+	 * Rule 7: only a capable user triggers anything. A subscriber must
+	 * see nothing and cause no request.
+	 */
+	public function test_a_non_capable_user_gets_nothing_from_the_global_render(): void {
+		$this->seed();
+		$GLOBALS['appneck_test_admin']['can'] = false;
+
+		$before = $this->transport->count();
+		$html   = $this->render_from_cache_only();
+
+		$this->assertSame( '', $html );
+		$this->assertSame( $before, $this->transport->count() );
+	}
+
+	public function test_print_refresh_script_prints_nothing_for_a_non_capable_user(): void {
+		$GLOBALS['appneck_test_admin']['can'] = false;
+
+		ob_start();
+		$this->notices->print_refresh_script();
+		$html = ob_get_clean();
+
+		$this->assertSame( '', $html );
+	}
+
+	/**
+	 * The script itself never makes a network call — printing it is a
+	 * pure string echo. All three AJAX actions are named inside it,
+	 * proving the browser is told to call THIS site, never Appneck
+	 * directly (rule 1).
+	 */
+	public function test_print_refresh_script_makes_no_network_call_and_names_only_same_site_actions(): void {
+		$before = $this->transport->count();
+
+		ob_start();
+		$this->notices->print_refresh_script();
+		$html = ob_get_clean();
+
+		$this->assertSame( $before, $this->transport->count() );
+		$this->assertStringContainsString( $this->notices->refresh_action(), $html );
+		$this->assertStringContainsString( $this->notices->poll_action(), $html );
+		$this->assertStringContainsString( $this->notices->dismiss_ajax_action(), $html );
+		$this->assertStringNotContainsString( self::BASE_URL, $html, 'the script must never carry an Appneck URL, only admin-ajax.php' );
+	}
+
+	public function test_print_refresh_script_pauses_on_visibilitychange_and_has_an_idle_timeout(): void {
+		ob_start();
+		$this->notices->print_refresh_script();
+		$html = ob_get_clean();
+
+		$this->assertStringContainsString( 'visibilitychange', $html );
+		$this->assertStringContainsString( 'idleTimeoutMs', $html );
+		$this->assertStringContainsString( (string) ( AnnouncementNotices::IDLE_TIMEOUT_SECONDS * 1000 ), $html );
+
+		// The rule this whole layer exists to enforce, present as an
+		// actual guard in the shipped code, not merely asserted by intent:
+		// a non-urgent version change must not trigger a pull.
+		$this->assertStringContainsString( 'hasUrgent && container.getAttribute', $html );
+	}
+
+	// -----------------------------------------------------------------
+	// handle_refresh_ajax()
+	// -----------------------------------------------------------------
+
+	private function ajax_post( array $post ) {
+		$_POST = $post;
+	}
+
+	public function test_refresh_ajax_requires_capability(): void {
+		$GLOBALS['appneck_test_admin']['can'] = false;
+		$this->ajax_post( array( 'nonce' => 'x' ) );
+
+		$this->assertNull( $this->notices->handle_refresh_ajax() );
+		$this->assertNotNull( $this->notices->denied );
+	}
+
+	public function test_refresh_ajax_requires_a_valid_nonce(): void {
+		$GLOBALS['appneck_test_admin']['nonce_ok'] = false;
+		$this->ajax_post( array( 'nonce' => 'x' ) );
+
+		$this->assertNull( $this->notices->handle_refresh_ajax() );
+	}
+
+	public function test_refresh_ajax_fetches_when_stale_and_returns_html(): void {
+		$this->realtime_config->note_version( 1 );
+		$this->realtime_config->note_version( 2 ); // marks stale
+
+		$this->transport->queue(
+			Response::from_http(
+				200,
+				array(),
+				json_encode( array( 'announcements' => array(
+					array( 'id' => self::SECURITY_ID, 'type' => 'security', 'title' => 'Fresh notice', 'body' => '' ),
+				) ) )
+			)
+		);
+		$this->ajax_post( array( 'nonce' => 'x' ) );
+
+		$result = $this->notices->handle_refresh_ajax();
+
+		$this->assertStringContainsString( 'Fresh notice', $result['html'] );
+		$this->assertFalse( $this->realtime_config->is_stale(), 'a successful refresh must clear staleness' );
+	}
+
+	/**
+	 * The exact scenario Part 9 names for this endpoint too: ten
+	 * concurrent calls, one upstream request.
+	 */
+	public function test_refresh_ajax_single_flight_ten_concurrent_calls_produce_one_upstream_request(): void {
+		$this->realtime_config->note_version( 1 );
+		$this->realtime_config->note_version( 2 ); // marks stale, so every caller WANTS to refresh
+
+		$this->transport->queue(
+			Response::from_http( 200, array(), json_encode( array( 'announcements' => array() ) ) )
+		);
+		$this->ajax_post( array( 'nonce' => 'x' ) );
+
+		for ( $i = 0; $i < 10; $i++ ) {
+			$this->notices->handle_refresh_ajax();
+		}
+
+		$this->assertSame( 1, $this->transport->count(), 'ten concurrent refresh calls must produce exactly one upstream request' );
+	}
+
+	public function test_refresh_ajax_skips_the_network_on_an_open_circuit(): void {
+		$this->seed(); // warms the announcements cache
+		$this->realtime_config->note_version( 1 );
+		$this->realtime_config->note_version( 2 ); // stale, so it WOULD refresh
+
+		$this->realtime_config->record_failure();
+		$this->realtime_config->record_failure();
+		$this->realtime_config->record_failure();
+
+		$before = $this->transport->count();
+		$this->ajax_post( array( 'nonce' => 'x' ) );
+		$result = $this->notices->handle_refresh_ajax();
+
+		$this->assertSame( $before, $this->transport->count(), 'an open circuit must not attempt a refresh' );
+		$this->assertStringContainsString( 'Security release 2.4.1', $result['html'], 'the cached announcements must still be returned' );
+	}
+
+	public function test_refresh_ajax_does_not_fetch_when_nothing_is_stale_and_the_cache_is_fresh(): void {
+		$this->seed();
+
+		$before = $this->transport->count();
+		$this->ajax_post( array( 'nonce' => 'x' ) );
+		$this->notices->handle_refresh_ajax();
+
+		$this->assertSame( $before, $this->transport->count() );
+	}
+
+	// -----------------------------------------------------------------
+	// handle_poll_ajax()
+	// -----------------------------------------------------------------
+
+	public function test_poll_ajax_requires_capability(): void {
+		$GLOBALS['appneck_test_admin']['can'] = false;
+		$this->ajax_post( array( 'nonce' => 'x' ) );
+
+		$this->assertNull( $this->notices->handle_poll_ajax() );
+	}
+
+	public function test_poll_ajax_returns_config_version_and_has_urgent(): void {
+		$this->transport->queue(
+			Response::from_http( 200, array( 'etag' => '"v1"' ), json_encode( array( 'config_version' => 9, 'has_urgent' => true ) ) )
+		);
+		$this->ajax_post( array( 'nonce' => 'x' ) );
+
+		$result = $this->notices->handle_poll_ajax();
+
+		$this->assertSame( 9, $result['config_version'] );
+		$this->assertTrue( $result['has_urgent'] );
+	}
+
+	/**
+	 * The same single-flight guarantee, for the poll endpoint — Part 3
+	 * rule 4 names both the refresh AND the poll explicitly.
+	 */
+	public function test_poll_ajax_single_flight_ten_concurrent_calls_produce_one_upstream_request(): void {
+		$this->transport->queue(
+			Response::from_http( 200, array( 'etag' => '"v1"' ), json_encode( array( 'config_version' => 1, 'has_urgent' => false ) ) )
+		);
+		$this->ajax_post( array( 'nonce' => 'x' ) );
+
+		for ( $i = 0; $i < 10; $i++ ) {
+			$this->notices->handle_poll_ajax();
+		}
+
+		$this->assertSame( 1, $this->transport->count() );
+	}
+
+	// -----------------------------------------------------------------
+	// handle_dismiss_ajax()
+	// -----------------------------------------------------------------
+
+	public function test_dismiss_ajax_requires_capability(): void {
+		$GLOBALS['appneck_test_admin']['can'] = false;
+		$this->ajax_post( array( 'nonce' => 'x', 'id' => self::SECURITY_ID ) );
+
+		$this->assertNull( $this->notices->handle_dismiss_ajax() );
+	}
+
+	public function test_dismiss_ajax_hides_locally_immediately(): void {
+		$this->seed();
+		$this->ajax_post( array( 'nonce' => 'x', 'id' => self::SECURITY_ID ) );
+
+		$result = $this->notices->handle_dismiss_ajax();
+
+		$this->assertTrue( $result['dismissed'] );
+		$this->assertTrue( $this->announcements->is_dismissed( self::SECURITY_ID ) );
+	}
+
+	/**
+	 * §6.3: local dismissal succeeds and stays hidden even when the
+	 * best-effort remote report fails — the SDK never has a client
+	 * configured for /sdk/v1/announcements/{id}/dismiss in this test's
+	 * transport queue, so that POST hits QueueingTransport's
+	 * "nothing queued" transport error. The local dismissal must be
+	 * unaffected.
+	 */
+	public function test_dismiss_ajax_succeeds_locally_even_when_the_remote_report_fails(): void {
+		$this->seed();
+		// Deliberately nothing queued in $this->transport for the
+		// dismiss POST — it will fail as a transport error.
+		$this->ajax_post( array( 'nonce' => 'x', 'id' => self::SECURITY_ID ) );
+
+		$result = $this->notices->handle_dismiss_ajax();
+
+		$this->assertTrue( $result['dismissed'] );
+		$this->assertTrue( $this->announcements->is_dismissed( self::SECURITY_ID ) );
+	}
+
+	public function test_dismiss_ajax_with_no_fast_client_still_dismisses_locally(): void {
+		$this->seed();
+
+		$notices = new AnnouncementNotices( $this->announcements, self::KEY, $this->realtime_config, null );
+		$_POST   = array( 'nonce' => 'x', 'id' => self::SECURITY_ID );
+
+		$result = $notices->handle_dismiss_ajax();
+
+		$this->assertTrue( $result['dismissed'] );
+		$this->assertTrue( $this->announcements->is_dismissed( self::SECURITY_ID ) );
+	}
+
+	public function test_dismiss_ajax_reports_false_for_an_unknown_id_without_dying(): void {
+		$this->seed();
+		$this->ajax_post( array( 'nonce' => 'x', 'id' => 'not-a-real-id' ) );
+
+		$result = $this->notices->handle_dismiss_ajax();
+
+		$this->assertFalse( $result['dismissed'] );
 	}
 }

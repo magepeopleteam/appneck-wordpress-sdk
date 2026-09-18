@@ -84,6 +84,9 @@ final class Telemetry {
 	/** @var Environment */
 	private $environment;
 
+	/** @var RealtimeConfig|null */
+	private $realtime_config = null;
+
 	public function __construct( Client $client, EventQueue $queue, ?Logger $logger = null, ?Consent $consent = null, ?Environment $environment = null ) {
 		$this->client  = $client;
 		$this->queue   = $queue;
@@ -98,6 +101,19 @@ final class Telemetry {
 	/** Also settable after construction — see Consent::set_telemetry. */
 	public function set_consent( ?Consent $consent ) {
 		$this->consent = $consent;
+	}
+
+	/**
+	 * Wired the same way as Consent (settable after construction, so both
+	 * stay independently constructible): every successful flush hands its
+	 * response's config_version to RealtimeConfig, which decides whether
+	 * anything actually changed (13-realtime-config-delivery.md §4).
+	 * Supersedes the older per-feature `survey_questions_updated_at`
+	 * marker this method used to carry (§6.2) — one signal, read the same
+	 * way from every response that carries it.
+	 */
+	public function set_realtime_config( ?RealtimeConfig $realtime_config ) {
+		$this->realtime_config = $realtime_config;
 	}
 
 	public function queue() {
@@ -457,6 +473,10 @@ final class Telemetry {
 
 		if ( 202 === $response->status() ) {
 			$this->clear_resolved( $response, $events );
+
+			if ( null !== $this->realtime_config ) {
+				$this->realtime_config->note_version( $response->get( 'config_version' ) );
+			}
 
 			return;
 		}

@@ -159,15 +159,20 @@ final class DeactivationSurvey {
 		echo '<div id="appneck-sdk-survey-' . esc_attr( $this->key ) . '" class="appneck-sdk-survey" hidden>';
 		echo '<div class="appneck-sdk-survey__backdrop" data-appneck-cancel></div>';
 		echo '<div class="appneck-sdk-survey__dialog" role="dialog" aria-modal="true" aria-labelledby="appneck-sdk-survey-title-' . esc_attr( $this->key ) . '">';
+		echo '<div class="appneck-sdk-survey__header">';
 		echo '<button type="button" class="appneck-sdk-survey__close" data-appneck-cancel aria-label="' . esc_attr( $config['strings']['close'] ) . '">&times;</button>';
-		echo '<h2 id="appneck-sdk-survey-title-' . esc_attr( $this->key ) . '">' . esc_html( $config['strings']['heading'] ) . '</h2>';
+		echo '<h2 id="appneck-sdk-survey-title-' . esc_attr( $this->key ) . '"><span class="appneck-sdk-survey__icon" aria-hidden="true">&#128075;</span>' . esc_html( $config['strings']['heading'] ) . '</h2>';
 		echo '<p class="appneck-sdk-survey__intro">' . esc_html( $config['strings']['intro'] ) . '</p>';
+		echo '</div>';
+		echo '<div class="appneck-sdk-survey__body">';
 		echo '<form class="appneck-sdk-survey__form" novalidate><div data-appneck-fields></div></form>';
+		echo '<p class="appneck-sdk-survey__note">&#128274; Your answer is only used to improve ' . esc_html( $this->product_name ) . ' &mdash; it is never shared or sold.</p>';
 		echo '<p class="appneck-sdk-survey__actions">';
-		echo '<button type="button" class="button button-primary" data-appneck-submit>' . esc_html( $config['strings']['submit'] ) . '</button> ';
-		echo '<button type="button" class="button" data-appneck-skip>' . esc_html( $config['strings']['skip'] ) . '</button> ';
-		echo '<button type="button" class="button-link" data-appneck-cancel>' . esc_html( $config['strings']['cancel'] ) . '</button>';
+		echo '<button type="button" class="button button-primary appneck-sdk-survey__btn appneck-sdk-survey__btn--primary" data-appneck-submit>' . esc_html( $config['strings']['submit'] ) . '</button>';
+		echo '<button type="button" class="button appneck-sdk-survey__btn appneck-sdk-survey__btn--secondary" data-appneck-skip>' . esc_html( $config['strings']['skip'] ) . '</button>';
+		echo '<button type="button" class="button-link appneck-sdk-survey__btn appneck-sdk-survey__btn--link" data-appneck-cancel>' . esc_html( $config['strings']['cancel'] ) . '</button>';
 		echo '</p>';
+		echo '</div>';
 		echo '</div></div>';
 
 		$this->render_style();
@@ -179,23 +184,41 @@ final class DeactivationSurvey {
 		// classes for anything a site owner would recognise, so the modal
 		// looks like part of wp-admin rather than like a guest.
 		echo '<style>
-.appneck-sdk-survey{position:fixed;inset:0;z-index:100050;display:flex;align-items:center;justify-content:center}
+.appneck-sdk-survey{position:fixed;inset:0;z-index:100050;display:flex;align-items:center;justify-content:center;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
 .appneck-sdk-survey[hidden]{display:none}
-.appneck-sdk-survey__backdrop{position:absolute;inset:0;background:rgba(0,0,0,.6)}
-.appneck-sdk-survey__dialog{position:relative;background:#fff;color:#1d2327;max-width:520px;width:calc(100% - 32px);max-height:calc(100vh - 64px);overflow-y:auto;padding:24px;border-radius:4px;box-shadow:0 10px 40px rgba(0,0,0,.3)}
-.appneck-sdk-survey__dialog h2{margin:0 24px 4px 0;font-size:18px;line-height:1.3}
-.appneck-sdk-survey__intro{margin:0 0 16px;color:#50575e}
-.appneck-sdk-survey__close{position:absolute;top:8px;right:8px;background:none;border:0;font-size:22px;line-height:1;cursor:pointer;color:#787c82;padding:4px 8px}
+.appneck-sdk-survey__backdrop{position:absolute;inset:0;background:rgba(16,20,26,.55);-webkit-backdrop-filter:blur(2px);backdrop-filter:blur(2px);animation:appneck-sdk-survey-fade .18s ease-out}
+.appneck-sdk-survey__dialog{position:relative;background:#fff;color:#1d2327;max-width:480px;width:calc(100% - 32px);max-height:calc(100vh - 64px);overflow-y:auto;border-radius:16px;box-shadow:0 24px 60px -12px rgba(16,20,26,.35),0 0 0 1px rgba(16,20,26,.04);animation:appneck-sdk-survey-pop .22s cubic-bezier(.22,1,.36,1)}
+.appneck-sdk-survey__header{position:relative;padding:28px 32px 22px;background:linear-gradient(135deg,#4f46e5 0%,#9333ea 55%,#db2777 100%);color:#fff}
+.appneck-sdk-survey__icon{display:inline-block;margin-right:8px;font-size:20px;line-height:1;vertical-align:-2px}
+.appneck-sdk-survey__dialog h2{margin:0 40px 8px 0;font-size:20px;font-weight:700;line-height:1.3;color:#fff}
+.appneck-sdk-survey__intro{margin:0 40px 0 0;color:rgba(255,255,255,.88);font-size:14px;line-height:1.5}
+.appneck-sdk-survey__body{padding:24px 32px 28px}
+.appneck-sdk-survey__note{display:flex;align-items:center;gap:6px;margin:2px 0 0;padding:10px 12px;background:#f5f3ff;border-radius:8px;color:#5b21b6;font-size:12.5px;line-height:1.4}
+.appneck-sdk-survey__close{position:absolute;top:16px;right:16px;width:30px;height:30px;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,.18);border:0;border-radius:50%;font-size:18px;line-height:1;cursor:pointer;color:#fff;transition:background .15s ease}
+.appneck-sdk-survey__close:hover{background:rgba(255,255,255,.3)}
 .appneck-sdk-survey__question{margin:0 0 18px}
-.appneck-sdk-survey__question legend,.appneck-sdk-survey__question .appneck-sdk-survey__label{display:block;font-weight:600;margin:0 0 6px;padding:0}
+.appneck-sdk-survey__question legend,.appneck-sdk-survey__question .appneck-sdk-survey__label{display:block;font-weight:600;font-size:13.5px;margin:0 0 8px;padding:0;color:#1d2327}
 .appneck-sdk-survey__question fieldset{border:0;padding:0;margin:0}
-.appneck-sdk-survey__question label{display:block;margin:0 0 4px;font-weight:400}
-.appneck-sdk-survey__question textarea{width:100%;min-height:80px}
-.appneck-sdk-survey__question select{max-width:100%}
-.appneck-sdk-survey__rating{display:flex;gap:12px;flex-wrap:wrap}
-.appneck-sdk-survey__rating label{display:flex;align-items:center;gap:4px;margin:0}
-.appneck-sdk-survey__error{color:#d63638;margin:4px 0 0;font-size:13px}
-.appneck-sdk-survey__actions{margin:20px 0 0;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.appneck-sdk-survey__question label{display:block;margin:0 0 6px;font-weight:400;font-size:14px}
+.appneck-sdk-survey__question textarea,.appneck-sdk-survey__question select{width:100%;min-height:90px;border:1px solid #d5d8dc;border-radius:8px;padding:10px 12px;font-size:14px;font-family:inherit;box-sizing:border-box;transition:border-color .15s ease,box-shadow .15s ease}
+.appneck-sdk-survey__question select{min-height:auto;max-width:100%}
+.appneck-sdk-survey__question textarea:focus,.appneck-sdk-survey__question select:focus{outline:none;border-color:#9333ea;box-shadow:0 0 0 3px rgba(147,51,234,.15)}
+.appneck-sdk-survey__rating{display:flex;gap:8px;flex-wrap:wrap}
+.appneck-sdk-survey__rating label{display:flex;align-items:center;gap:5px;margin:0;height:38px;padding:0 12px;border:1px solid #d5d8dc;border-radius:8px;cursor:pointer;font-size:14px;transition:border-color .15s ease,background .15s ease}
+.appneck-sdk-survey__rating label:has(input:checked){border-color:#9333ea;background:#f5f3ff;color:#6b21a8;font-weight:600}
+.appneck-sdk-survey__error{color:#d63638;margin:6px 0 0;font-size:13px}
+.appneck-sdk-survey__actions{margin:24px 0 0;padding-top:20px;border-top:1px solid #eef0f2;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.appneck-sdk-survey__btn{border-radius:8px!important;padding:8px 16px!important;height:auto!important;font-size:13.5px!important;font-weight:500!important;line-height:1.4!important;transition:transform .12s ease,box-shadow .12s ease,background .15s ease!important}
+.appneck-sdk-survey__btn--primary{border:0!important;background:linear-gradient(135deg,#4f46e5 0%,#9333ea 100%)!important;box-shadow:0 1px 2px rgba(88,28,135,.25)!important}
+.appneck-sdk-survey__btn--primary:hover{transform:translateY(-1px);box-shadow:0 6px 16px rgba(88,28,135,.35)!important}
+.appneck-sdk-survey__btn--secondary{background:#fff!important;border:1px solid #d5d8dc!important;color:#1d2327!important}
+.appneck-sdk-survey__btn--secondary:hover{background:#f6f7f7!important;border-color:#c3c6c9!important}
+.appneck-sdk-survey__btn--link{margin-left:auto;color:#5f6773!important;text-decoration:none!important}
+.appneck-sdk-survey__btn--link:hover{color:#1d2327!important;text-decoration:underline!important}
+@media (max-width:480px){.appneck-sdk-survey__btn--link{margin-left:0}}
+@keyframes appneck-sdk-survey-fade{from{opacity:0}to{opacity:1}}
+@keyframes appneck-sdk-survey-pop{from{opacity:0;transform:translateY(8px) scale(.97)}to{opacity:1;transform:translateY(0) scale(1)}}
+@media (prefers-reduced-motion:reduce){.appneck-sdk-survey__backdrop,.appneck-sdk-survey__dialog{animation:none}}
 </style>';
 	}
 

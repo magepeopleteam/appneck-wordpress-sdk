@@ -101,27 +101,39 @@ final class Client {
 	}
 
 	/**
-	 * @param string       $path
-	 * @param array<mixed> $query Appended to the URL. NOT signed — the
-	 *                            base string carries the path only
-	 *                            (journal §9.2a), so the server must not
-	 *                            be given security-relevant input here.
+	 * @param string                $path
+	 * @param array<mixed>          $query   Appended to the URL. NOT signed
+	 *                                       — the base string carries the
+	 *                                       path only (journal §9.2a), so
+	 *                                       the server must not be given
+	 *                                       security-relevant input here.
+	 * @param array<string, string> $headers Extra request headers, e.g.
+	 *                                       If-None-Match. Same reasoning
+	 *                                       as $query: not part of the
+	 *                                       signed base string, so nothing
+	 *                                       security-relevant belongs here
+	 *                                       either — the server-side
+	 *                                       equivalent (VerifySdkSignature)
+	 *                                       never reads a header for
+	 *                                       anything but the signature
+	 *                                       itself.
 	 */
-	public function get( $path, array $query = array() ) {
-		return $this->request( 'GET', $path, null, self::MODE_INSTALLATION, null, $query );
+	public function get( $path, array $query = array(), array $headers = array() ) {
+		return $this->request( 'GET', $path, null, self::MODE_INSTALLATION, null, $query, $headers );
 	}
 
 	/**
-	 * @param array<mixed>|null $payload
-	 * @param array<mixed>      $query
+	 * @param array<mixed>|null    $payload
+	 * @param array<mixed>         $query
+	 * @param array<string,string> $extra_headers
 	 */
-	private function request( $method, $path, $payload, $mode, $installation_id = null, array $query = array() ) {
+	private function request( $method, $path, $payload, $mode, $installation_id = null, array $query = array(), array $extra_headers = array() ) {
 		// One try/catch around everything. Not defensive clutter: this
 		// is the boundary between "an SDK problem" and "a fatal error on
 		// a stranger's website", and it has to hold even for bugs in
 		// this SDK that nobody has thought of yet.
 		try {
-			$response = $this->send( $method, $path, $payload, $mode, $installation_id, $query );
+			$response = $this->send( $method, $path, $payload, $mode, $installation_id, $query, $extra_headers );
 		} catch ( \Throwable $e ) {
 			// PHP 7+. Catches Error as well as Exception, which is the
 			// point — a TypeError from a malformed payload must not
@@ -141,10 +153,11 @@ final class Client {
 	}
 
 	/**
-	 * @param array<mixed>|null $payload
-	 * @param array<mixed>      $query
+	 * @param array<mixed>|null    $payload
+	 * @param array<mixed>         $query
+	 * @param array<string,string> $extra_headers
 	 */
-	private function send( $method, $path, $payload, $mode, $installation_id, array $query ) {
+	private function send( $method, $path, $payload, $mode, $installation_id, array $query, array $extra_headers = array() ) {
 		$config_error = $this->config->validation_error();
 
 		if ( null !== $config_error ) {
@@ -210,6 +223,15 @@ final class Client {
 
 		if ( null !== $body ) {
 			$headers['Content-Type'] = 'application/json';
+		}
+
+		// Merged in last: an extra header may add to the request (e.g.
+		// If-None-Match) but must never be able to override one of the
+		// signed identity headers above.
+		foreach ( $extra_headers as $name => $value ) {
+			if ( ! array_key_exists( $name, $headers ) ) {
+				$headers[ $name ] = $value;
+			}
 		}
 
 		$url = $this->config->url_for( $path );

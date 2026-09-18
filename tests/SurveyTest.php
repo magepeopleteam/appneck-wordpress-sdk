@@ -45,7 +45,7 @@ class SurveyTest extends TestCase {
 		$this->logger    = new RecordingLogger();
 	}
 
-	private function survey( $registered = true ): Survey {
+	private function survey( $registered = true, ?\Appneck\Sdk\RealtimeConfig $realtime_config = null ): Survey {
 		$client = new Client(
 			new Config( self::API_KEY, self::PRODUCT_SECRET, self::BASE_URL ),
 			$registered
@@ -54,7 +54,7 @@ class SurveyTest extends TestCase {
 			$this->transport
 		);
 
-		return new Survey( $client, $this->logger );
+		return new Survey( $client, $this->logger, $realtime_config );
 	}
 
 	/** @return array<int, array<string, mixed>> */
@@ -216,6 +216,114 @@ class SurveyTest extends TestCase {
 		$this->assertCount( 1, $questions );
 		$this->assertSame( self::TEXT_ID, $questions[0]['id'] );
 		$this->assertNull( $questions[0]['options'] );
+	}
+
+	// -----------------------------------------------------------------
+	// The shared circuit breaker (13-realtime-config-delivery.md Part 7)
+	// -----------------------------------------------------------------
+
+	/**
+	 * The exact scenario Part 7 exists for: the person standing at the
+	 * Deactivate modal must not wait out a doomed request during an
+	 * outage the breaker already knows about.
+	 */
+	public function test_an_open_circuit_skips_the_network_and_serves_the_stale_cache(): void {
+		$rc = new \Appneck\Sdk\RealtimeConfig( 'circuit-key' );
+		$survey = $this->survey( true, $rc );
+
+		$this->queue_questions();
+		$survey->questions(); // warms the cache
+
+		$rc->record_failure();
+		$rc->record_failure();
+		$rc->record_failure();
+		$this->assertTrue( $rc->is_open() );
+
+		$before = $this->transport->count();
+		$questions = $survey->questions( true ); // force, to prove the SKIP is the circuit, not the cache TTL
+
+		$this->assertSame( $before, $this->transport->count(), 'an open circuit must not attempt a request' );
+		$this->assertCount( 5, $questions );
+	}
+
+	/**
+	 * And with nothing ever cached at all, an open circuit must yield an
+	 * empty result — the modal's signal to let deactivation proceed
+	 * rather than trapping the user.
+	 */
+	public function test_an_open_circuit_with_nothing_cached_yields_an_empty_result(): void {
+		$rc = new \Appneck\Sdk\RealtimeConfig( 'circuit-key-2' );
+		$rc->record_failure();
+		$rc->record_failure();
+		$rc->record_failure();
+
+		$survey = $this->survey( true, $rc );
+
+		$before = $this->transport->count();
+		$this->assertSame( array(), $survey->questions() );
+		$this->assertSame( $before, $this->transport->count() );
+	}
+
+	public function test_a_successful_fetch_records_success_on_the_circuit(): void {
+		$rc = new \Appneck\Sdk\RealtimeConfig( 'circuit-key-3' );
+		$rc->record_failure();
+		$rc->record_failure();
+
+		$survey = $this->survey( true, $rc );
+		$this->queue_questions();
+		$survey->questions();
+
+		$rc->record_failure();
+		$this->assertFalse( $rc->is_open(), 'success must have reset the failure count, so one more failure is not the third' );
+	}
+
+	/**
+	 * A failed fetch falls back to whatever was cached, HOWEVER STALE —
+	 * not to an empty result. This is the behaviour change Part 7 makes:
+	 * previously a failure discarded an expired-but-still-useful cache.
+	 */
+	public function test_a_failed_fetch_falls_back_to_the_stale_cache_rather_than_emptying_it(): void {
+		$rc = new \Appneck\Sdk\RealtimeConfig( 'circuit-key-4' );
+		$survey = $this->survey( true, $rc );
+
+		$this->queue_questions();
+		$survey->questions(); // caches 5 questions
+
+		$this->transport->queue( Response::from_http( 500, array(), '{"message":"boom"}' ) );
+		$questions = $survey->questions( true );
+
+		$this->assertCount( 5, $questions, 'a failed fetch must fall back to the last cached answer, not an empty one' );
+	}
+
+	public function test_a_failed_fetch_records_a_failure_on_the_circuit(): void {
+		$rc = new \Appneck\Sdk\RealtimeConfig( 'circuit-key-5' );
+		$survey = $this->survey( true, $rc );
+
+		$this->transport->queue( Response::from_http( 500, array(), '' ) );
+		$survey->questions();
+
+		$rc->record_failure();
+		$rc->record_failure();
+		$this->assertTrue( $rc->is_open(), 'this should be the third failure counting the one questions() itself recorded' );
+	}
+
+	public function test_a_429_backs_off_via_retry_after_rather_than_the_fixed_threshold(): void {
+		$rc = new \Appneck\Sdk\RealtimeConfig( 'circuit-key-6' );
+		$survey = $this->survey( true, $rc );
+
+		$this->transport->queue(
+			Response::from_http( 429, array( 'retry-after' => '60' ), '{"message":"Rate limit exceeded"}' )
+		);
+		$survey->questions();
+
+		$this->assertTrue( $rc->is_open(), 'a single 429 must open the circuit immediately' );
+	}
+
+	public function test_no_realtime_config_wired_behaves_exactly_as_before(): void {
+		$survey = $this->survey(); // no RealtimeConfig at all
+		$this->queue_questions();
+
+		$this->assertCount( 5, $survey->questions() );
 	}
 
 	public function test_forget_clears_the_cached_questions(): void {
