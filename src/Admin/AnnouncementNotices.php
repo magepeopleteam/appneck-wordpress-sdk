@@ -577,6 +577,25 @@ var cfg = ' . $json . ';
 var container = document.getElementById(cfg.containerId);
 if (!container) { return; }
 
+// Position the container ourselves, once, right where WordPress core
+// own wp-admin/js/common.js would have moved a literal .notice element
+// to (right after the screen own <h1>/<h2>) -- deliberately not
+// relying on core to do this: that relocation runs exactly once, on
+// page ready, and if it ran on OUR element the page-load refresh below
+// (which replaces this container content once its own AJAX response
+// arrives, on no fixed schedule) could lose the race and leave a
+// second, un-relocated copy behind. This script tag prints in
+// admin_footer, well after the whole .wrap -- including its heading --
+// has already been parsed, so this move is synchronous and has nothing
+// left to race.
+(function () {
+	var wrap = document.querySelector(".wrap");
+	var heading = wrap ? wrap.querySelector("h1, h2") : null;
+	if (heading && heading.parentNode && container.parentNode !== heading.parentNode) {
+		heading.parentNode.insertBefore(container, heading.nextSibling);
+	}
+})();
+
 var lastVersion = null;
 var refreshedForVersion = null;
 var lastInteractionAt = Date.now();
