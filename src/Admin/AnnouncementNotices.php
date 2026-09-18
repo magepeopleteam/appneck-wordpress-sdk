@@ -295,6 +295,7 @@ final class AnnouncementNotices {
 		echo '<div class="notice ' . esc_attr( $class ) . ' appneck-sdk-announcement">';
 		echo $this->notice_icon( $announcement['type'] ); // phpcs:ignore -- static, non-user markup.
 		echo '<div class="appneck-sdk-announcement__content">';
+		echo '<span class="appneck-sdk-announcement__badge">' . esc_html( $this->notice_label( $announcement['type'] ) ) . '</span>';
 		echo '<p class="appneck-sdk-announcement__title">' . esc_html( $announcement['title'] ) . '</p>';
 
 		if ( '' !== $announcement['body'] ) {
@@ -401,6 +402,7 @@ final class AnnouncementNotices {
 		echo '<div class="notice ' . esc_attr( $class ) . ' appneck-sdk-announcement" data-appneck-announcement-id="' . esc_attr( $announcement['id'] ) . '">';
 		echo $this->notice_icon( $announcement['type'] ); // phpcs:ignore -- static, non-user markup.
 		echo '<div class="appneck-sdk-announcement__content">';
+		echo '<span class="appneck-sdk-announcement__badge">' . esc_html( $this->notice_label( $announcement['type'] ) ) . '</span>';
 		echo '<p class="appneck-sdk-announcement__title">' . esc_html( $announcement['title'] ) . '</p>';
 
 		if ( '' !== $announcement['body'] ) {
@@ -419,6 +421,26 @@ final class AnnouncementNotices {
 			// An unknown type from a newer server. Neutral rather than
 			// guessed at — and never the urgent one.
 			: 'notice-info';
+	}
+
+	/**
+	 * The small colored badge word next to the title — plain sentence
+	 * case, not the tracked-out ALL-CAPS eyebrow label wp-admin plugins
+	 * tend to overuse. Names what the announcement actually is, the
+	 * same job the icon and colour are already doing, so someone
+	 * scanning several at once can sort by kind without reading either.
+	 *
+	 * @param string $type
+	 */
+	private function notice_label( $type ) {
+		$labels = array(
+			'security' => 'Security',
+			'update'   => 'Update',
+			'feature'  => 'New feature',
+			'discount' => 'Offer',
+		);
+
+		return isset( $labels[ $type ] ) ? $labels[ $type ] : 'Notice';
 	}
 
 	/**
@@ -456,22 +478,35 @@ final class AnnouncementNotices {
 	 */
 	private function render_notice_style() {
 		echo '<style>
-.appneck-sdk-announcement{display:flex!important;align-items:flex-start;gap:12px;padding:14px 16px!important;border-radius:8px;box-shadow:0 1px 2px rgba(16,20,26,.05)}
-.appneck-sdk-announcement__icon{flex:0 0 auto;width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;margin-top:1px}
-.appneck-sdk-announcement__icon svg{width:17px;height:17px}
-.appneck-sdk-announcement__content{flex:1 1 auto;min-width:0;padding-top:1px}
-.appneck-sdk-announcement__title{margin:0 0 3px!important;font-size:14px;font-weight:600;color:#1d2327}
+.appneck-sdk-announcement{display:flex!important;align-items:flex-start;gap:14px;padding:16px 18px!important;border-radius:10px;border-left-width:0!important;box-shadow:0 1px 3px rgba(16,20,26,.08)}
+.appneck-sdk-announcement__icon{flex:0 0 auto;width:36px;height:36px;border-radius:50%;display:flex;align-items:center;justify-content:center;margin-top:1px;color:#fff;box-shadow:0 2px 5px rgba(16,20,26,.18)}
+.appneck-sdk-announcement__icon svg{width:18px;height:18px}
+.appneck-sdk-announcement__content{flex:1 1 auto;min-width:0;padding-top:2px}
+.appneck-sdk-announcement__badge{display:inline-block;margin:0 0 6px;padding:2px 9px;border-radius:999px;font-size:11px;font-weight:600;color:#fff;line-height:1.6}
+.appneck-sdk-announcement__title{margin:0 0 3px!important;font-size:14.5px;font-weight:700;color:#1d2327}
 .appneck-sdk-announcement__body{margin:0 0 8px!important;font-size:13px;color:#3c434a;line-height:1.55}
-.appneck-sdk-announcement__dismiss{background:none!important;border:0!important;padding:0!important;margin:0!important;font-size:12.5px;color:#787c82;cursor:pointer;text-decoration:underline}
+.appneck-sdk-announcement__dismiss{background:none!important;border:0!important;padding:0!important;margin:0!important;font-size:12.5px;font-weight:600;color:#5f6773;cursor:pointer;text-decoration:underline}
 .appneck-sdk-announcement__dismiss:hover{color:#1d2327}
-.appneck-sdk-announcement.notice-error{background:#fef2f2}
-.appneck-sdk-announcement.notice-error .appneck-sdk-announcement__icon{background:#fee2e2;color:#dc2626}
-.appneck-sdk-announcement.notice-warning{background:#fffbeb}
-.appneck-sdk-announcement.notice-warning .appneck-sdk-announcement__icon{background:#fef3c7;color:#b45309}
-.appneck-sdk-announcement.notice-info{background:#eff6ff}
-.appneck-sdk-announcement.notice-info .appneck-sdk-announcement__icon{background:#dbeafe;color:#2563eb}
-.appneck-sdk-announcement.notice-success{background:#f0fdf4}
-.appneck-sdk-announcement.notice-success .appneck-sdk-announcement__icon{background:#dcfce7;color:#15803d}
+
+.appneck-sdk-announcement.notice-error{background:linear-gradient(135deg,#fee2e2 0%,#fecaca 100%)}
+.appneck-sdk-announcement.notice-error .appneck-sdk-announcement__icon,
+.appneck-sdk-announcement.notice-error .appneck-sdk-announcement__badge{background:#dc2626}
+.appneck-sdk-announcement.notice-error .appneck-sdk-announcement__title{color:#991b1b}
+
+.appneck-sdk-announcement.notice-warning{background:linear-gradient(135deg,#fef3c7 0%,#fde68a 100%)}
+.appneck-sdk-announcement.notice-warning .appneck-sdk-announcement__icon,
+.appneck-sdk-announcement.notice-warning .appneck-sdk-announcement__badge{background:#d97706}
+.appneck-sdk-announcement.notice-warning .appneck-sdk-announcement__title{color:#92400e}
+
+.appneck-sdk-announcement.notice-info{background:linear-gradient(135deg,#dbeafe 0%,#bfdbfe 100%)}
+.appneck-sdk-announcement.notice-info .appneck-sdk-announcement__icon,
+.appneck-sdk-announcement.notice-info .appneck-sdk-announcement__badge{background:#2563eb}
+.appneck-sdk-announcement.notice-info .appneck-sdk-announcement__title{color:#1e3a8a}
+
+.appneck-sdk-announcement.notice-success{background:linear-gradient(135deg,#dcfce7 0%,#bbf7d0 100%)}
+.appneck-sdk-announcement.notice-success .appneck-sdk-announcement__icon,
+.appneck-sdk-announcement.notice-success .appneck-sdk-announcement__badge{background:#16a34a}
+.appneck-sdk-announcement.notice-success .appneck-sdk-announcement__title{color:#14532d}
 </style>';
 	}
 
