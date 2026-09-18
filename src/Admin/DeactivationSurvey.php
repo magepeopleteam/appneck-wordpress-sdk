@@ -168,11 +168,16 @@ final class DeactivationSurvey {
 		echo '<div class="appneck-sdk-survey__body">';
 		echo '<form class="appneck-sdk-survey__form" novalidate><div data-appneck-fields></div></form>';
 		echo '<p class="appneck-sdk-survey__note">&#128274; Your answer is only used to improve ' . esc_html( $this->product_name ) . ' &mdash; it is never shared or sold.</p>';
-		echo '<p class="appneck-sdk-survey__actions">';
+		echo '</div>';
+		// A sibling of __body, not inside it: __body is the part that
+		// scrolls when the question list is long, and this must stay
+		// pinned at the bottom of the dialog regardless — the site
+		// owner should never have to scroll past every question just
+		// to find Submit.
+		echo '<div class="appneck-sdk-survey__actions">';
 		echo '<button type="button" class="button button-primary appneck-sdk-survey__btn appneck-sdk-survey__btn--primary" data-appneck-submit>' . esc_html( $config['strings']['submit'] ) . '</button>';
 		echo '<button type="button" class="button appneck-sdk-survey__btn appneck-sdk-survey__btn--secondary" data-appneck-skip>' . esc_html( $config['strings']['skip'] ) . '</button>';
 		echo '<button type="button" class="button-link appneck-sdk-survey__btn appneck-sdk-survey__btn--link" data-appneck-cancel>' . esc_html( $config['strings']['cancel'] ) . '</button>';
-		echo '</p>';
 		echo '</div>';
 		echo '</div></div>';
 
@@ -203,8 +208,8 @@ final class DeactivationSurvey {
 .appneck-sdk-survey{position:fixed;inset:0;z-index:100050;display:flex;align-items:center;justify-content:center;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
 .appneck-sdk-survey[hidden]{display:none}
 .appneck-sdk-survey__backdrop{position:absolute;inset:0;background:rgba(16,20,26,.55);-webkit-backdrop-filter:blur(2px);backdrop-filter:blur(2px);animation:appneck-sdk-survey-fade .18s ease-out}
-.appneck-sdk-survey__dialog{position:relative;background:#fff;color:#1d2327;max-width:480px;width:calc(100% - 32px);max-height:calc(100vh - 64px);overflow-y:auto;border-radius:16px;box-shadow:0 24px 60px -12px rgba(16,20,26,.35),0 0 0 1px rgba(16,20,26,.04);animation:appneck-sdk-survey-pop .22s cubic-bezier(.22,1,.36,1)}
-.appneck-sdk-survey__header{position:relative;overflow:hidden;padding:28px 32px 22px;background:linear-gradient(135deg,#4f46e5 0%,#9333ea 55%,#db2777 100%);color:#fff}
+.appneck-sdk-survey__dialog{position:relative;display:flex;flex-direction:column;background:#fff;color:#1d2327;max-width:480px;width:calc(100% - 32px);max-height:calc(100vh - 64px);overflow:hidden;border-radius:16px;box-shadow:0 24px 60px -12px rgba(16,20,26,.35),0 0 0 1px rgba(16,20,26,.04);animation:appneck-sdk-survey-pop .22s cubic-bezier(.22,1,.36,1)}
+.appneck-sdk-survey__header{position:relative;flex:0 0 auto;overflow:hidden;padding:28px 32px 22px;background:linear-gradient(135deg,#4f46e5 0%,#9333ea 55%,#db2777 100%);color:#fff}
 .appneck-sdk-survey__header-decor{position:absolute;inset:0;pointer-events:none}
 .appneck-sdk-survey__header-decor svg{position:absolute;stroke:#fff;opacity:.16}
 .appneck-sdk-survey__header-decor svg:nth-child(1){width:56px;height:56px;top:-14px;right:62px;transform:rotate(-10deg)}
@@ -213,7 +218,7 @@ final class DeactivationSurvey {
 .appneck-sdk-survey__icon{display:inline-block;margin-right:8px;font-size:20px;line-height:1;vertical-align:-2px}
 .appneck-sdk-survey__dialog h2{margin:0 40px 8px 0;font-size:20px;font-weight:700;line-height:1.3;color:#fff}
 .appneck-sdk-survey__intro{margin:0 40px 0 0;color:rgba(255,255,255,.88);font-size:14px;line-height:1.5}
-.appneck-sdk-survey__body{padding:24px 32px 28px}
+.appneck-sdk-survey__body{flex:1 1 auto;min-height:0;overflow-y:auto;padding:24px 32px 20px}
 .appneck-sdk-survey__note{display:flex;align-items:center;gap:6px;margin:2px 0 0;padding:10px 12px;background:#f5f3ff;border-radius:8px;color:#5b21b6;font-size:12.5px;line-height:1.4}
 .appneck-sdk-survey__close{position:absolute;top:16px;right:16px;width:30px;height:30px;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,.18);border:0;border-radius:50%;font-size:18px;line-height:1;cursor:pointer;color:#fff;transition:background .15s ease}
 .appneck-sdk-survey__close:hover{background:rgba(255,255,255,.3)}
@@ -228,7 +233,7 @@ final class DeactivationSurvey {
 .appneck-sdk-survey__rating label{display:flex;align-items:center;gap:5px;margin:0;height:38px;padding:0 12px;border:1px solid #d5d8dc;border-radius:8px;cursor:pointer;font-size:14px;transition:border-color .15s ease,background .15s ease}
 .appneck-sdk-survey__rating label:has(input:checked){border-color:#9333ea;background:#f5f3ff;color:#6b21a8;font-weight:600}
 .appneck-sdk-survey__error{color:#d63638;margin:6px 0 0;font-size:13px}
-.appneck-sdk-survey__actions{margin:24px 0 0;padding-top:20px;border-top:1px solid #eef0f2;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.appneck-sdk-survey__actions{flex:0 0 auto;padding:16px 32px;border-top:1px solid #eef0f2;background:#fff;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .appneck-sdk-survey__btn{border-radius:8px!important;padding:8px 16px!important;height:auto!important;font-size:13.5px!important;font-weight:500!important;line-height:1.4!important;transition:transform .12s ease,box-shadow .12s ease,background .15s ease!important}
 .appneck-sdk-survey__btn--primary{border:0!important;background:linear-gradient(135deg,#4f46e5 0%,#9333ea 100%)!important;box-shadow:0 1px 2px rgba(88,28,135,.25)!important}
 .appneck-sdk-survey__btn--primary:hover{transform:translateY(-1px);box-shadow:0 6px 16px rgba(88,28,135,.35)!important}
