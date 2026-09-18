@@ -160,6 +160,7 @@ final class DeactivationSurvey {
 		echo '<div class="appneck-sdk-survey__backdrop" data-appneck-cancel></div>';
 		echo '<div class="appneck-sdk-survey__dialog" role="dialog" aria-modal="true" aria-labelledby="appneck-sdk-survey-title-' . esc_attr( $this->key ) . '">';
 		echo '<div class="appneck-sdk-survey__header">';
+		echo $this->render_header_decor();
 		echo '<button type="button" class="appneck-sdk-survey__close" data-appneck-cancel aria-label="' . esc_attr( $config['strings']['close'] ) . '">&times;</button>';
 		echo '<h2 id="appneck-sdk-survey-title-' . esc_attr( $this->key ) . '"><span class="appneck-sdk-survey__icon" aria-hidden="true">&#128075;</span>' . esc_html( $config['strings']['heading'] ) . '</h2>';
 		echo '<p class="appneck-sdk-survey__intro">' . esc_html( $config['strings']['intro'] ) . '</p>';
@@ -179,6 +180,21 @@ final class DeactivationSurvey {
 		$this->render_script( $config );
 	}
 
+	/**
+	 * Three line-icons scattered behind the header text — a star, a
+	 * speech bubble, a checked clipboard — because this modal is
+	 * specifically a rating/feedback/checklist moment, not a generic
+	 * banner. Static markup, no user data, so no escaping is needed;
+	 * `aria-hidden` and `pointer-events:none` keep it decorative only.
+	 */
+	private function render_header_decor() {
+		return '<div class="appneck-sdk-survey__header-decor" aria-hidden="true">'
+			. '<svg viewBox="0 0 24 24" fill="none"><path d="M12 3.5l2.6 5.4 5.9.7-4.3 4.1 1.1 5.8L12 16.6l-5.3 2.9 1.1-5.8-4.3-4.1 5.9-.7L12 3.5z" stroke="#fff" stroke-width="1.4" stroke-linejoin="round"/></svg>'
+			. '<svg viewBox="0 0 24 24" fill="none"><path d="M4 5.5h16a1 1 0 0 1 1 1V15a1 1 0 0 1-1 1H9.8L5.6 19.6a.6.6 0 0 1-1-.46V16H4a1 1 0 0 1-1-1V6.5a1 1 0 0 1 1-1z" stroke="#fff" stroke-width="1.4" stroke-linejoin="round"/><path d="M7.5 9.5h9M7.5 12.5h6" stroke="#fff" stroke-width="1.4" stroke-linecap="round"/></svg>'
+			. '<svg viewBox="0 0 24 24" fill="none"><rect x="5.5" y="4.5" width="13" height="16" rx="2" stroke="#fff" stroke-width="1.4"/><path d="M9 4.5h6v2a1 1 0 0 1-1 1h-4a1 1 0 0 1-1-1v-2z" stroke="#fff" stroke-width="1.4"/><path d="M8.5 13.2l2 2 4.5-4.8" stroke="#fff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+			. '</div>';
+	}
+
 	private function render_style() {
 		// Scoped to this component and leaning on core's own button
 		// classes for anything a site owner would recognise, so the modal
@@ -188,7 +204,12 @@ final class DeactivationSurvey {
 .appneck-sdk-survey[hidden]{display:none}
 .appneck-sdk-survey__backdrop{position:absolute;inset:0;background:rgba(16,20,26,.55);-webkit-backdrop-filter:blur(2px);backdrop-filter:blur(2px);animation:appneck-sdk-survey-fade .18s ease-out}
 .appneck-sdk-survey__dialog{position:relative;background:#fff;color:#1d2327;max-width:480px;width:calc(100% - 32px);max-height:calc(100vh - 64px);overflow-y:auto;border-radius:16px;box-shadow:0 24px 60px -12px rgba(16,20,26,.35),0 0 0 1px rgba(16,20,26,.04);animation:appneck-sdk-survey-pop .22s cubic-bezier(.22,1,.36,1)}
-.appneck-sdk-survey__header{position:relative;padding:28px 32px 22px;background:linear-gradient(135deg,#4f46e5 0%,#9333ea 55%,#db2777 100%);color:#fff}
+.appneck-sdk-survey__header{position:relative;overflow:hidden;padding:28px 32px 22px;background:linear-gradient(135deg,#4f46e5 0%,#9333ea 55%,#db2777 100%);color:#fff}
+.appneck-sdk-survey__header-decor{position:absolute;inset:0;pointer-events:none}
+.appneck-sdk-survey__header-decor svg{position:absolute;stroke:#fff;opacity:.16}
+.appneck-sdk-survey__header-decor svg:nth-child(1){width:56px;height:56px;top:-14px;right:62px;transform:rotate(-10deg)}
+.appneck-sdk-survey__header-decor svg:nth-child(2){width:44px;height:44px;bottom:-12px;right:130px;transform:rotate(8deg)}
+.appneck-sdk-survey__header-decor svg:nth-child(3){width:38px;height:38px;top:50%;right:14px;transform:translateY(-50%) rotate(-6deg)}
 .appneck-sdk-survey__icon{display:inline-block;margin-right:8px;font-size:20px;line-height:1;vertical-align:-2px}
 .appneck-sdk-survey__dialog h2{margin:0 40px 8px 0;font-size:20px;font-weight:700;line-height:1.3;color:#fff}
 .appneck-sdk-survey__intro{margin:0 40px 0 0;color:rgba(255,255,255,.88);font-size:14px;line-height:1.5}
