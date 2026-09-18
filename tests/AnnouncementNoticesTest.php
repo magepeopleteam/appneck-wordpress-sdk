@@ -507,8 +507,36 @@ class AnnouncementNoticesTest extends TestCase {
 
 		// The rule this whole layer exists to enforce, present as an
 		// actual guard in the shipped code, not merely asserted by intent:
-		// a non-urgent version change must not trigger a pull.
-		$this->assertStringContainsString( 'hasUrgent && container.getAttribute', $html );
+		// a non-urgent version change must not trigger a pull, and the
+		// guard is keyed on the version already refreshed for, not on
+		// the container's own data-has-urgent attribute (that version
+		// latched permanently once tripped and never reset — see
+		// test_the_poll_urgent_guard_is_keyed_on_version_not_the_dom_attribute).
+		$this->assertStringContainsString( 'hasUrgent && version !== refreshedForVersion', $html );
+	}
+
+	/**
+	 * The eCab-shaped bug for THIS endpoint, found by a randomized-delay
+	 * repeat of E2E scenario A: once any urgent notice had ever shown
+	 * once, the OLD guard (container.getAttribute("data-has-urgent") !==
+	 * "1") latched permanently — nothing ever reset the attribute back
+	 * to "0" without a navigation, so a second, later, unrelated urgent
+	 * announcement was silently skipped for the rest of that tab's life.
+	 * Asserting against the shipped script string, the same way the
+	 * test above does, since this bug lives entirely in inline JS a
+	 * PHPUnit process cannot execute.
+	 */
+	public function test_the_poll_urgent_guard_is_keyed_on_version_not_the_dom_attribute(): void {
+		ob_start();
+		$this->notices->print_refresh_script();
+		$html = ob_get_clean();
+
+		$this->assertStringNotContainsString(
+			'container.getAttribute("data-has-urgent") !== "1"',
+			$html,
+			'the old DOM-attribute latch must not come back — it never resets once tripped'
+		);
+		$this->assertStringContainsString( 'refreshedForVersion = refreshingForVersion', $html );
 	}
 
 	// -----------------------------------------------------------------
@@ -602,6 +630,39 @@ class AnnouncementNoticesTest extends TestCase {
 		$this->assertSame( $before, $this->transport->count() );
 	}
 
+	/**
+	 * The Part 2/eCab-shaped check for THIS endpoint: a warm cache
+	 * holding OLD content must not gate the network call once the
+	 * version marker says the site is stale — unlike the survey bug,
+	 * Announcements::refresh() has no cache-freshness check of its own
+	 * to bypass, so this is confirming that absence, not fixing a gate.
+	 */
+	public function test_refresh_ajax_replaces_a_warm_cache_holding_old_content_when_stale(): void {
+		$this->seed(); // warms the cache with "Security release 2.4.1" / "Bulk export is here"
+		$this->realtime_config->note_version( 1 );
+		$this->realtime_config->note_version( 2 ); // marks stale
+
+		$this->transport->queue(
+			Response::from_http(
+				200,
+				array(),
+				json_encode(
+					array(
+						'announcements' => array(
+							array( 'id' => self::SECURITY_ID, 'type' => 'security', 'title' => 'A brand new notice', 'body' => '' ),
+						),
+					)
+				)
+			)
+		);
+		$this->ajax_post( array( 'nonce' => 'x' ) );
+
+		$result = $this->notices->handle_refresh_ajax();
+
+		$this->assertStringContainsString( 'A brand new notice', $result['html'] );
+		$this->assertStringNotContainsString( 'Bulk export is here', $result['html'], 'the old cached content must not survive a live refresh' );
+	}
+
 	// -----------------------------------------------------------------
 	// handle_poll_ajax()
 	// -----------------------------------------------------------------
@@ -629,6 +690,37 @@ class AnnouncementNoticesTest extends TestCase {
 	 * The same single-flight guarantee, for the poll endpoint — Part 3
 	 * rule 4 names both the refresh AND the poll explicitly.
 	 */
+	/**
+	 * The Part 2/eCab-shaped check for the poll: a warm `poll_cache`
+	 * holding an OLD has_urgent/config_version must not gate the next
+	 * network attempt once the single-flight lock has cleared — the
+	 * lock rate-limits how OFTEN this fires, it must never become a
+	 * cache the poll cannot see past.
+	 */
+	public function test_poll_ajax_pulls_the_new_payload_when_has_urgent_flips(): void {
+		$this->transport->queue(
+			Response::from_http( 200, array( 'etag' => '"v1"' ), json_encode( array( 'config_version' => 1, 'has_urgent' => false ) ) )
+		);
+		$this->ajax_post( array( 'nonce' => 'x' ) );
+		$first = $this->notices->handle_poll_ajax();
+
+		$this->assertFalse( $first['has_urgent'] );
+
+		// Simulate the single-flight lock's TTL having elapsed, exactly
+		// as a real 60-second tick would — this test cares about the
+		// cache, not about re-proving the lock's own cooldown.
+		$GLOBALS['appneck_test_transients'] = array();
+
+		$this->transport->queue(
+			Response::from_http( 200, array( 'etag' => '"v2"' ), json_encode( array( 'config_version' => 2, 'has_urgent' => true ) ) )
+		);
+		$second = $this->notices->handle_poll_ajax();
+
+		$this->assertSame( 2, $this->transport->count(), 'the second tick must be a genuine second upstream request' );
+		$this->assertSame( 2, $second['config_version'] );
+		$this->assertTrue( $second['has_urgent'], 'the flip must reach the caller, not the stale cached poll' );
+	}
+
 	public function test_poll_ajax_single_flight_ten_concurrent_calls_produce_one_upstream_request(): void {
 		$this->transport->queue(
 			Response::from_http( 200, array( 'etag' => '"v1"' ), json_encode( array( 'config_version' => 1, 'has_urgent' => false ) ) )

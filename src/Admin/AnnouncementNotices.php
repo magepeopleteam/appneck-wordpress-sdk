@@ -449,6 +449,7 @@ var container = document.getElementById(cfg.containerId);
 if (!container) { return; }
 
 var lastVersion = null;
+var refreshedForVersion = null;
 var lastInteractionAt = Date.now();
 var pollTimer = null;
 
@@ -483,10 +484,14 @@ function applyHtml(html, hasUrgent) {
 	container.setAttribute("data-has-urgent", hasUrgent ? "1" : "0");
 }
 
-function refresh() {
+function refresh(refreshingForVersion) {
 	post(cfg.refreshAction, cfg.refreshNonce, "", function (ok, data) {
 		if (!ok || !data || !data.success || !data.data) { return; }
 		applyHtml(data.data.html || "", data.data.has_urgent);
+		// Only latch on confirmed success: a failed/timed-out refresh
+		// must not mark this version as "handled", or the NEXT poll
+		// tick (which would otherwise retry) would wrongly skip it too.
+		if (undefined !== refreshingForVersion) { refreshedForVersion = refreshingForVersion; }
 	});
 }
 
@@ -504,12 +509,28 @@ function poll() {
 		// not the one after that: gating on "a version change we can
 		// detect" would need two ticks (one to record the baseline, one
 		// to notice the change), silently doubling the worst-case delay
-		// for the one case Layer 3 exists to make fast. The real
-		// idempotency check is data-has-urgent, not lastVersion — it is
-		// what stops a redundant pull once the urgent notice is already
-		// showing.
-		if (hasUrgent && container.getAttribute("data-has-urgent") !== "1") {
-			refresh();
+		// for the one case Layer 3 exists to make fast.
+		//
+		// The idempotency check is refreshedForVersion, a version
+		// number, NOT the container own data-has-urgent attribute. A
+		// real bug shipped with the DOM-attribute version: once ANY
+		// urgent notice had ever been shown once during a page visit,
+		// data-has-urgent latched to "1" and nothing ever cleared it
+		// back to "0" — dismissing or deleting that notice removes the
+		// DOM node but never touches the attribute, and no further
+		// page-load refresh happens without a navigation this tab may
+		// never make. So a SECOND, later, unrelated urgent announcement
+		// (a config_version bump has_urgent still reports true for) was
+		// silently skipped forever, for as long as that tab stayed open —
+		// found by a randomized-delay repeat of E2E scenario A publishing
+		// a second urgent item into an already-urgent-once session, not
+		// by any single best-case run. Comparing against the specific
+		// version already refreshed for fixes this: a new version number
+		// always re-triggers, the same version never does, and a failed
+		// refresh version is never latched (see refresh() above), so
+		// it retries on the very next tick rather than skipping forever.
+		if (hasUrgent && version !== refreshedForVersion) {
+			refresh(version);
 		}
 
 		// lastVersion still records every tick, kept for any future
