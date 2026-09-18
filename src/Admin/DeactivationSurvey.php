@@ -455,7 +455,13 @@ submitButton.addEventListener("click", function () {
 		$op = isset( $_POST['op'] ) ? (string) $_POST['op'] : '';
 
 		if ( 'questions' === $op ) {
-			return $this->send( array( 'questions' => $this->survey->questions() ) );
+			// Forced: this is the modal-open moment, and the cache is a
+			// fallback for a failed/breaker-skipped fetch, never a gate on
+			// a healthy one. A survey edited minutes ago must be visible
+			// immediately, not after whatever is left of a stale 12-hour
+			// window — see Survey::questions()'s own fallback chain for
+			// what still protects this call when the network is down.
+			return $this->send( array( 'questions' => $this->survey->questions( true ) ) );
 		}
 
 		if ( 'submit' !== $op ) {

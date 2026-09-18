@@ -295,6 +295,25 @@ class SurveyTest extends TestCase {
 		$this->assertCount( 5, $questions, 'a failed fetch must fall back to the last cached answer, not an empty one' );
 	}
 
+	/**
+	 * The same fallback, specifically for the 3-second fast-client
+	 * timeout the modal actually uses (Sdk::bootstrap()'s $fastClient) —
+	 * a timeout is a transport error, not an HTTP response, so it takes
+	 * a different Response constructor than the 500 case above.
+	 */
+	public function test_a_timed_out_request_falls_back_to_the_stale_cache(): void {
+		$rc     = new \Appneck\Sdk\RealtimeConfig( 'circuit-key-timeout' );
+		$survey = $this->survey( true, $rc );
+
+		$this->queue_questions();
+		$survey->questions(); // caches 5 questions
+
+		$this->transport->queue( Response::from_transport_error( 'Operation timed out after 3000 milliseconds' ) );
+		$questions = $survey->questions( true );
+
+		$this->assertCount( 5, $questions, 'a timeout must fall back to the last cached answer, not an empty one' );
+	}
+
 	public function test_a_failed_fetch_records_a_failure_on_the_circuit(): void {
 		$rc = new \Appneck\Sdk\RealtimeConfig( 'circuit-key-5' );
 		$survey = $this->survey( true, $rc );

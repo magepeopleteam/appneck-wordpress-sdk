@@ -21,13 +21,24 @@ use Appneck\Sdk\Logging\NullLogger;
  * installation (journal §9.3a), so a resurrected submission days later
  * would be a duplicate at best.
  *
- * ## Questions are cached, because of when they are needed
+ * ## The cache is a fallback, never a gate, at the moment that matters
  *
- * They are needed at the instant someone clicks Deactivate, which is the
- * worst possible time to make a network call they are waiting on. So the
- * list is cached for CACHE_TTL and served from there, including the empty
- * result — a product with no survey configured is the common case and
- * must not mean an API call every time the plugins screen is used.
+ * The modal-open call (Admin\DeactivationSurvey::handle_ajax(), 'questions'
+ * op) always passes $force = true: it needs THIS product's CURRENT
+ * survey, not whatever was true up to 12 hours ago, and a survey edited
+ * minutes before someone clicks Deactivate must be visible immediately.
+ * A real bug shipped here once — the cache was checked first
+ * regardless of $force's default, so an edit made after the last
+ * natural fetch stayed invisible for up to CACHE_TTL, and nothing ever
+ * passed $force = true to notice. What CACHE_TTL still legitimately
+ * governs: how long the fallback copy is trusted when a live attempt is
+ * skipped (breaker open) or fails (network/timeout) — see the failure
+ * branch of questions() below — and how often the 'submit' op's own
+ * (un-forced) re-fetch has to touch the network rather than reuse the
+ * copy the 'questions' op just refreshed seconds earlier. A product
+ * with no survey configured is the common case and must not mean an
+ * API call on every visit to the plugins screen that never opens the
+ * modal at all.
  *
  * ## Local validation, but the server is still the authority
  *

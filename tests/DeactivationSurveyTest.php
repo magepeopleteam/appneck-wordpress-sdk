@@ -245,6 +245,103 @@ class DeactivationSurveyTest extends TestCase {
 		$this->assertSame( array( 'questions' => array() ), $this->ajax( 'questions' ) );
 	}
 
+	/**
+	 * The exact eCab bug: a warm cache holding OLD content must not gate
+	 * the modal-open fetch. A cold-cache test cannot catch this — the
+	 * bug is specifically that a cache with something already in it,
+	 * under CACHE_TTL, was served instead of asking the network at all.
+	 * Confirmed to fail against the pre-fix code (handle_ajax()'s
+	 * 'questions' op calling questions() with no argument): it would
+	 * assert 1 cached question instead of the 3 the server now has.
+	 */
+	public function test_the_modal_open_fetch_bypasses_a_warm_cache_holding_different_content(): void {
+		// Warm the cache with one old question via an ordinary,
+		// un-forced fetch — exactly what a page-load-triggered read
+		// would have done hours earlier.
+		$this->transport->queue(
+			Response::from_http(
+				200,
+				array(),
+				json_encode(
+					array(
+						'questions' => array(
+							array(
+								'id'       => '99999999-9999-7999-8999-999999999999',
+								'position' => 1,
+								'type'     => 'text_area',
+								'text'     => 'An old question nobody uses anymore',
+								'options'  => null,
+							),
+						),
+					)
+				)
+			)
+		);
+		$this->survey->questions();
+
+		// The server now has different, larger content — the eCab
+		// scenario: 1 cached question, several more added since.
+		$this->queue_questions();
+
+		$result = $this->ajax( 'questions' );
+
+		$this->assertCount( 3, $result['questions'], 'the modal must show the CURRENT survey, not the stale cache' );
+		$this->assertSame( 'Why are you deactivating?', $result['questions'][0]['text'] );
+	}
+
+	/**
+	 * Forcing must not throw the fallback away: a warm cache plus an
+	 * unreachable API must still show the cached questions, not the
+	 * empty list an unreachable API with NOTHING cached returns (that
+	 * case is test_an_unreachable_api_also_returns_an_empty_list above).
+	 */
+	public function test_the_modal_open_fetch_falls_back_to_the_warm_cache_when_the_api_is_unreachable(): void {
+		$this->queue_questions();
+		$this->survey->questions(); // warms the cache with the 3 questions
+
+		// Nothing queued for the next request: unreachable.
+		$result = $this->ajax( 'questions' );
+
+		$this->assertCount( 3, $result['questions'], 'a live-fetch failure must fall back to the warm cache' );
+	}
+
+	/**
+	 * The shared circuit breaker must also serve the warm cache with no
+	 * network attempt at all, rather than the forced fetch racing an
+	 * already-known-bad connection.
+	 */
+	public function test_the_modal_open_fetch_serves_the_warm_cache_with_no_network_attempt_when_the_breaker_is_open(): void {
+		$rc = new \Appneck\Sdk\RealtimeConfig( 'modal-breaker-key' );
+
+		$client = new Client(
+			new Config( self::API_KEY, self::PRODUCT_SECRET, self::BASE_URL ),
+			new ArrayCredentialStore( self::INSTALL_ID, self::INSTALL_SECRET ),
+			$this->transport
+		);
+		$survey = new Survey( $client, new RecordingLogger(), $rc );
+		$modal  = new DeactivationSurvey( $survey, self::KEY, null, array( 'product_name' => 'Acme Bookings' ) );
+		$modal->set_plugin_basename( 'acme-bookings/acme-bookings.php' );
+
+		$this->queue_questions();
+		$survey->questions(); // warms the cache with the 3 questions
+
+		$rc->record_failure();
+		$rc->record_failure();
+		$rc->record_failure();
+		$this->assertTrue( $rc->is_open() );
+
+		$_POST = array(
+			'action' => $modal->action(),
+			'nonce'  => 'nonce-for-' . $modal->action(),
+			'op'     => 'questions',
+		);
+		$before = $this->transport->count();
+		$result = $modal->handle_ajax();
+
+		$this->assertSame( $before, $this->transport->count(), 'an open circuit must not attempt a request' );
+		$this->assertCount( 3, $result['questions'] );
+	}
+
 	// -----------------------------------------------------------------
 	// Submitting
 	// -----------------------------------------------------------------
