@@ -16,12 +16,16 @@ namespace Appneck\Sdk\Storage;
  * the API, which is not on every page load, and adding to the autoloaded
  * option blob is a cost paid by every request on the host's site.
  *
- * The option name is namespaced by the product's API key so two plugins
- * from the same vendor on one site keep separate installations. The key
- * is hashed into the name rather than embedded raw: option names are not
- * secret, they surface in exports and debug tooling, and the API key —
- * while not a credential on its own (journal §9.2a) — still does not
- * belong scattered through wp_options.
+ * The option name is namespaced by a stable per-plugin identity
+ * (Config::storage_identity()) so two plugins from the same vendor on one
+ * site keep separate installations. Deliberately NOT the product's API
+ * key: a key can rotate (journal §11.4), and hashing the key directly
+ * used to mean a plugin update that shipped a rotated key made an
+ * already-registered site's own credentials permanently unreachable to
+ * itself — journal §35. Hashed into the name rather than embedded raw:
+ * option names are not secret, they surface in exports and debug
+ * tooling, and neither the identity nor the API key belongs scattered
+ * through wp_options in the clear.
  */
 final class WpOptionsCredentialStore implements CredentialStore {
 
@@ -30,8 +34,9 @@ final class WpOptionsCredentialStore implements CredentialStore {
 	/** @var string */
 	private $option_name;
 
-	public function __construct( $api_key ) {
-		$this->option_name = self::OPTION_PREFIX . substr( hash( 'sha256', (string) $api_key ), 0, 32 );
+	/** @param string $storage_identity See Config::storage_identity(). */
+	public function __construct( $storage_identity ) {
+		$this->option_name = self::OPTION_PREFIX . substr( hash( 'sha256', (string) $storage_identity ), 0, 32 );
 	}
 
 	public function option_name() {

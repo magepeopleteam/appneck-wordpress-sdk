@@ -31,11 +31,16 @@ namespace Appneck\Sdk\Queue;
  *
  * ## One table, all products
  *
- * Two plugins from the same vendor may each embed the SDK with different
- * product keys. They share this one table and are separated by a
- * `product_key` column rather than getting a table each — WordPress
- * sites already carry enough tables, and the query is indexed on
- * (product_key, id) so the separation costs nothing.
+ * Two plugins from the same vendor may each embed the SDK. They share
+ * this one table and are separated by a `product_key` column rather than
+ * getting a table each — WordPress sites already carry enough tables,
+ * and the query is indexed on (product_key, id) so the separation costs
+ * nothing. That column is named `product_key` for history, but is a hash
+ * of a stable per-plugin identity (Config::storage_identity()), never of
+ * the product's API key directly — the key can rotate (journal §11.4),
+ * and hashing it directly used to mean a plugin update shipping a
+ * rotated key made a site's own already-queued events unreachable to
+ * itself (journal §35).
  *
  * ## Degrading rather than fataling
  *
@@ -73,8 +78,9 @@ final class TableEventQueue implements EventQueue {
 	/** @var bool|null */
 	private $available = null;
 
-	public function __construct( $api_key ) {
-		$this->product_key = substr( hash( 'sha256', (string) $api_key ), 0, 32 );
+	/** @param string $storage_identity See Config::storage_identity(). */
+	public function __construct( $storage_identity ) {
+		$this->product_key = substr( hash( 'sha256', (string) $storage_identity ), 0, 32 );
 	}
 
 	public static function table_name() {

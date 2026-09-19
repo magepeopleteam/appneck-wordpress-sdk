@@ -95,7 +95,7 @@ final class Telemetry {
 		// Defaulted rather than required: the inventory it collects needs
 		// no plugin_file, so every existing caller keeps working unchanged.
 		$this->environment = null !== $environment ? $environment : new Environment();
-		$this->key     = substr( hash( 'sha256', $client->config()->api_key() ), 0, 32 );
+		$this->key     = substr( hash( 'sha256', $client->config()->storage_identity() ), 0, 32 );
 	}
 
 	/** Also settable after construction — see Consent::set_telemetry. */

@@ -37,6 +37,9 @@ $appneck_sdk_classes = array(
 	'Appneck\\Sdk\\Queue\\EventQueue'                 => $appneck_sdk_src . '/Queue/EventQueue.php',
 	'Appneck\\Sdk\\Queue\\TableEventQueue'            => $appneck_sdk_src . '/Queue/TableEventQueue.php',
 	'Appneck\\Sdk\\Queue\\ArrayEventQueue'            => $appneck_sdk_src . '/Queue/ArrayEventQueue.php',
+	// After TableEventQueue, whose table it re-points, and before Sdk,
+	// which runs it before anything else is allowed to read storage.
+	'Appneck\\Sdk\\Storage\\LegacyStorageMigration'   => $appneck_sdk_src . '/Storage/LegacyStorageMigration.php',
 	'Appneck\\Sdk\\Http\\RateLimit'                   => $appneck_sdk_src . '/Http/RateLimit.php',
 	'Appneck\\Sdk\\Http\\Response'                    => $appneck_sdk_src . '/Http/Response.php',
 	'Appneck\\Sdk\\Http\\Transport'                   => $appneck_sdk_src . '/Http/Transport.php',

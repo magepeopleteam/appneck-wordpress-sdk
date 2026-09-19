@@ -102,7 +102,7 @@ final class Consent {
 		$this->client    = $client;
 		$this->telemetry = $telemetry;
 		$this->logger    = null !== $logger ? $logger : new NullLogger();
-		$this->key       = substr( hash( 'sha256', $client->config()->api_key() ), 0, 32 );
+		$this->key       = substr( hash( 'sha256', $client->config()->storage_identity() ), 0, 32 );
 	}
 
 	/**

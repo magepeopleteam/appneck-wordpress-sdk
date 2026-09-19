@@ -12,6 +12,7 @@ use Appneck\Sdk\Queue\EventQueue;
 use Appneck\Sdk\Queue\TableEventQueue;
 use Appneck\Sdk\Logging\Logger;
 use Appneck\Sdk\Storage\CredentialStore;
+use Appneck\Sdk\Storage\LegacyStorageMigration;
 use Appneck\Sdk\Storage\WpOptionsCredentialStore;
 use Appneck\Sdk\Storage\WpOptionsLicenseStore;
 
@@ -39,9 +40,15 @@ final class Sdk {
 	const VERSION = '0.1.0';
 
 	/**
-	 * @param string $api_key        Product API key (pk_...).
-	 * @param string $product_secret Bootstrap signing secret (sk_...).
-	 * @param string $base_url       API root.
+	 * @param string      $api_key          Product API key (pk_...).
+	 * @param string      $product_secret   Bootstrap signing secret (sk_...).
+	 * @param string      $base_url         API root.
+	 * @param string|null $storage_identity See Config's own doc — what local
+	 *                                      storage is namespaced by instead of
+	 *                                      the (rotatable) api_key. Falls back
+	 *                                      to $api_key when omitted, which is
+	 *                                      why this documented standalone
+	 *                                      example still works unchanged.
 	 */
 	public static function client(
 		$api_key,
@@ -49,12 +56,13 @@ final class Sdk {
 		$base_url,
 		?CredentialStore $credentials = null,
 		?Transport $transport = null,
-		?Logger $logger = null
+		?Logger $logger = null,
+		$storage_identity = null
 	) {
-		$config = new Config( $api_key, $product_secret, $base_url );
+		$config = new Config( $api_key, $product_secret, $base_url, $storage_identity );
 
 		if ( null === $credentials ) {
-			$credentials = new WpOptionsCredentialStore( $api_key );
+			$credentials = new WpOptionsCredentialStore( $config->storage_identity() );
 		}
 
 		return new Client( $config, $credentials, $transport, $logger );
@@ -93,9 +101,23 @@ final class Sdk {
 		?EventQueue $queue = null,
 		array $options = array()
 	) {
-		$client = self::client( $api_key, $product_secret, $base_url, $credentials, $transport, $logger );
+		// Not $api_key: a product's key can rotate (journal §11.4/§35),
+		// and everything below that stores anything locally must stay
+		// findable across that rotation — see Config's own doc.
+		$storage_identity = self::storage_identity_for( $plugin_file );
 
-		$queue       = null !== $queue ? $queue : new TableEventQueue( $api_key );
+		// Moves an already-registered site off whichever namespace it was
+		// last using. MUST run before anything reads storage — the first
+		// thing to look and find nothing concludes this site has never
+		// registered, and that conclusion is what the whole of §35 is
+		// about. Cheap after the first boot: one autoloaded marker read.
+		( new LegacyStorageMigration( $storage_identity ) )->run(
+			self::legacy_storage_identities( $api_key, $plugin_file )
+		);
+
+		$client = self::client( $api_key, $product_secret, $base_url, $credentials, $transport, $logger, $storage_identity );
+
+		$queue       = null !== $queue ? $queue : new TableEventQueue( $client->config()->storage_identity() );
 		$environment = new Environment( $plugin_file );
 
 		// 13-realtime-config-delivery.md: the shared circuit breaker and
@@ -104,7 +126,7 @@ final class Sdk {
 		// fetch). One instance, one key, shared across all three — see
 		// RealtimeConfig's own class doc for why one breaker rather than
 		// three.
-		$deactivationKey = substr( hash( 'sha256', $api_key ), 0, 32 );
+		$deactivationKey = substr( hash( 'sha256', $client->config()->storage_identity() ), 0, 32 );
 		$realtimeConfig  = new RealtimeConfig( $deactivationKey );
 
 		// A dedicated short-timeout client (rule 3: 3 seconds, not the
@@ -173,7 +195,7 @@ final class Sdk {
 		// is a single autoloaded option read.
 		$license = new License(
 			new LicenseClient( $client->config(), $transport, $logger ),
-			new WpOptionsLicenseStore( $api_key ),
+			new WpOptionsLicenseStore( $client->config()->storage_identity() ),
 			$logger,
 			$options
 		);
@@ -233,6 +255,16 @@ final class Sdk {
 	 *
 	 * Returns null when this site never completed registration — there is
 	 * nothing on the server to mark removed, and that is not an error.
+	 *
+	 * @param string|null $plugin_file Same storage identity `bootstrap()`
+	 *                                 uses (journal §35) — omitted here
+	 *                                 because no existing caller passes it,
+	 *                                 so it defaults to `WP_UNINSTALL_PLUGIN`
+	 *                                 (guaranteed defined by the calling
+	 *                                 convention this method's own doc
+	 *                                 requires), falling back to $api_key
+	 *                                 only if that constant is somehow also
+	 *                                 absent.
 	 */
 	public static function uninstall(
 		$api_key,
@@ -240,9 +272,27 @@ final class Sdk {
 		$base_url,
 		?CredentialStore $credentials = null,
 		?Transport $transport = null,
-		?Logger $logger = null
+		?Logger $logger = null,
+		$plugin_file = null
 	) {
-		$client    = self::client( $api_key, $product_secret, $base_url, $credentials, $transport, $logger );
+		if ( null === $plugin_file || '' === $plugin_file ) {
+			// Already a plugin_basename ("my-plugin/my-plugin.php"), which
+			// is exactly what storage_identity_for() produces — so an
+			// uninstall reaches the same namespace bootstrap() wrote to.
+			$plugin_file = defined( 'WP_UNINSTALL_PLUGIN' ) ? WP_UNINSTALL_PLUGIN : null;
+		}
+
+		$storage_identity = null === $plugin_file ? null : self::storage_identity_for( $plugin_file );
+
+		// An uninstall on a site that never booted the new code still has
+		// to find the credentials it is about to report `removed` with.
+		if ( null !== $storage_identity ) {
+			( new LegacyStorageMigration( $storage_identity ) )->run(
+				self::legacy_storage_identities( $api_key, $plugin_file )
+			);
+		}
+
+		$client    = self::client( $api_key, $product_secret, $base_url, $credentials, $transport, $logger, $storage_identity );
 		$lifecycle = new Lifecycle( $client );
 
 		$response = $lifecycle->on_uninstall();
@@ -269,7 +319,7 @@ final class Sdk {
 		// (13-realtime-config-delivery.md) are this installation's own
 		// bookkeeping, not the server's; nothing to reconcile, only to
 		// remove.
-		( new RealtimeConfig( substr( hash( 'sha256', $api_key ), 0, 32 ) ) )->forget();
+		( new RealtimeConfig( substr( hash( 'sha256', $client->config()->storage_identity() ), 0, 32 ) ) )->forget();
 
 		// The license is the one piece of uninstall cleanup with a
 		// SERVER-side consequence: the activation slot this domain holds
@@ -280,11 +330,56 @@ final class Sdk {
 		// License::on_uninstall().
 		( new License(
 			new LicenseClient( $client->config(), $transport, $logger ),
-			new WpOptionsLicenseStore( $api_key ),
+			new WpOptionsLicenseStore( $client->config()->storage_identity() ),
 			$logger
 		) )->on_uninstall();
 
 		return $response;
+	}
+
+	/**
+	 * What local storage is namespaced by — see Config's constructor doc
+	 * for why this is deliberately not the api_key.
+	 *
+	 * `plugin_basename()`, not the raw absolute path: the path contains
+	 * the site's document root, so it changes when a site is moved to
+	 * another host, restored into a different directory, or migrated
+	 * between staging and production — all of which are ordinary events,
+	 * and any of which would otherwise orphan the credentials exactly the
+	 * way a key rotation used to. The basename
+	 * ("my-plugin/my-plugin.php") is stable across all of them, and is
+	 * what WordPress itself identifies a plugin by.
+	 *
+	 * @param string $plugin_file
+	 * @return string
+	 */
+	public static function storage_identity_for( $plugin_file ) {
+		if ( function_exists( 'plugin_basename' ) ) {
+			$basename = plugin_basename( $plugin_file );
+
+			if ( is_string( $basename ) && '' !== $basename ) {
+				return $basename;
+			}
+		}
+
+		return (string) $plugin_file;
+	}
+
+	/**
+	 * Namespaces a site may still be storing its credentials under, newest
+	 * first.
+	 *
+	 * The api_key is the one that shipped in real releases. The absolute
+	 * plugin path never did — it existed only between the first cut of
+	 * §35's fix and this one — but it is listed because the development
+	 * site that found this bug was left holding exactly that, and a
+	 * migration that cannot repair the state its own predecessor created
+	 * is not much of a migration.
+	 *
+	 * @return array<int, string>
+	 */
+	private static function legacy_storage_identities( $api_key, $plugin_file ) {
+		return array( $api_key, (string) $plugin_file );
 	}
 
 	/**

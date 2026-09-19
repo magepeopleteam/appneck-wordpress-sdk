@@ -28,22 +28,58 @@ final class Config {
 	/** @var string */
 	private $base_url;
 
+	/** @var string */
+	private $storage_identity;
+
 	/**
-	 * @param string $api_key        The product's public API key (pk_...).
-	 * @param string $product_secret The bootstrap signing secret (sk_...).
-	 * @param string $base_url       API root, e.g. https://appneck.com.
+	 * @param string      $api_key          The product's public API key (pk_...).
+	 * @param string      $product_secret   The bootstrap signing secret (sk_...).
+	 * @param string      $base_url         API root, e.g. https://appneck.com.
+	 * @param string|null $storage_identity What local wp_options/queue storage is
+	 *                                      namespaced by. Deliberately NOT the
+	 *                                      api_key: a product's key can rotate
+	 *                                      (`product_api_keys` supports
+	 *                                      active/deprecated/revoked — journal
+	 *                                      §11.4), and every class in this
+	 *                                      package that stores anything locally
+	 *                                      used to hash the *current* api_key to
+	 *                                      build its option name. A plugin
+	 *                                      release that ships a rotated key made
+	 *                                      every already-registered site compute
+	 *                                      a brand-new, empty namespace, conclude
+	 *                                      it had never registered, and attempt a
+	 *                                      fresh enrolment that collided with its
+	 *                                      own still-active installation row —
+	 *                                      permanently, since Lifecycle gives up
+	 *                                      after MAX_ATTEMPTS with no self-heal
+	 *                                      (journal §35). Callers pass something
+	 *                                      that outlives key rotation — the
+	 *                                      plugin's own file path — instead.
+	 *                                      Falls back to $api_key when omitted,
+	 *                                      so existing direct callers (tests,
+	 *                                      the documented Sdk::client() example)
+	 *                                      keep working exactly as before.
 	 */
-	public function __construct( $api_key, $product_secret, $base_url ) {
+	public function __construct( $api_key, $product_secret, $base_url, $storage_identity = null ) {
 		$this->api_key        = (string) $api_key;
 		$this->product_secret = (string) $product_secret;
 		// Trailing slash stripped once, here, so path joining is
 		// unambiguous everywhere else and a configured
 		// "https://host/" can never produce "https://host//sdk/v1/...".
 		$this->base_url = rtrim( (string) $base_url, '/' );
+
+		$this->storage_identity = ( null !== $storage_identity && '' !== (string) $storage_identity )
+			? (string) $storage_identity
+			: $this->api_key;
 	}
 
 	public function api_key() {
 		return $this->api_key;
+	}
+
+	/** @return string See the constructor's $storage_identity doc. */
+	public function storage_identity() {
+		return $this->storage_identity;
 	}
 
 	public function product_secret() {

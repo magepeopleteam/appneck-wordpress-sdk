@@ -103,7 +103,7 @@ final class Lifecycle {
 		$this->realtime_config = $realtime_config;
 		$this->environment = null !== $environment ? $environment : new Environment( $plugin_file );
 		$this->telemetry   = $telemetry;
-		$this->key         = substr( hash( 'sha256', $client->config()->api_key() ), 0, 32 );
+		$this->key         = substr( hash( 'sha256', $client->config()->storage_identity() ), 0, 32 );
 	}
 
 	/**

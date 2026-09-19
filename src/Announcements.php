@@ -97,7 +97,7 @@ final class Announcements {
 	public function __construct( Client $client, ?Logger $logger = null, ?RealtimeConfig $realtime_config = null ) {
 		$this->client          = $client;
 		$this->logger          = null !== $logger ? $logger : new NullLogger();
-		$this->key             = substr( hash( 'sha256', $client->config()->api_key() ), 0, 32 );
+		$this->key             = substr( hash( 'sha256', $client->config()->storage_identity() ), 0, 32 );
 		$this->realtime_config = $realtime_config;
 	}
 

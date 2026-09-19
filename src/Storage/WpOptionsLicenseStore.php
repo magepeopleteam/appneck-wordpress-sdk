@@ -26,11 +26,15 @@ namespace Appneck\Sdk\Storage;
  * handful of scalars from the last result, and four integers of backoff
  * state. Nothing here grows with the site's age or traffic.
  *
- * The option name is namespaced by a hash of the product's API key, the
- * same convention WpOptionsCredentialStore and Consent already use, so
- * two plugins from one vendor on one site keep separate licenses. The
- * key is hashed rather than embedded raw because option names are not
- * secret and surface in exports and debug tooling.
+ * The option name is namespaced by a hash of a stable per-plugin identity
+ * (Config::storage_identity(), not the product's API key — journal §35:
+ * the key can rotate, and hashing it directly used to make an
+ * already-registered site's own storage unreachable to itself the moment
+ * a plugin update shipped the new key), the same convention
+ * WpOptionsCredentialStore and Consent already use, so two plugins from
+ * one vendor on one site keep separate licenses. Hashed rather than
+ * embedded raw because option names are not secret and surface in
+ * exports and debug tooling.
  */
 final class WpOptionsLicenseStore implements LicenseStore {
 
@@ -39,9 +43,9 @@ final class WpOptionsLicenseStore implements LicenseStore {
 	/** @var string */
 	private $option_name;
 
-	/** @param string $api_key */
-	public function __construct( $api_key ) {
-		$this->option_name = self::OPTION_PREFIX . substr( hash( 'sha256', (string) $api_key ), 0, 32 );
+	/** @param string $storage_identity See Config::storage_identity(). */
+	public function __construct( $storage_identity ) {
+		$this->option_name = self::OPTION_PREFIX . substr( hash( 'sha256', (string) $storage_identity ), 0, 32 );
 	}
 
 	public function option_name() {
