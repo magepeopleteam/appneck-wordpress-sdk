@@ -627,6 +627,58 @@ reasons this matters, not just style:
   purposes, build that as its own flag — it is a few lines of
   `wp_options`, not a reason to overload this one.
 
+### Marketing opt-in
+
+**Requires SDK 0.2.0+.** A site running an older SDK build simply never
+sends these fields, and the server keeps recording telemetry consent
+exactly as it always has — see "What an older SDK build does" below.
+
+A second checkbox on the *same* notice — "Also email me product updates,
+tips and renewal reminders at `admin_email`" — asking a genuinely
+independent question: whether Appneck may email the site owner about
+*this specific product*, separately from whether Appneck may collect
+usage data from their site. Checking it and clicking **No thanks** on
+usage data is a valid, honoured combination, and so is the reverse.
+
+Nothing extra to wire — `Sdk::bootstrap()` builds and wires
+`MarketingConsent` the same way it wires `Consent`, and the checkbox
+rides on the existing notice with no separate call. Read it with:
+
+```php
+$sdk->marketing_consent()->is_opted_in();
+$sdk->marketing_consent()->email();    // only ever set when opted in
+$sdk->marketing_consent()->wording();  // the exact text the checkbox showed
+```
+
+**The email collected is `get_option( 'admin_email' )`** — the site's own
+WordPress admin email, already set, nothing new to configure. That may be
+a shared team inbox rather than one specific person; if the checkbox
+would be shown with no `admin_email` set at all, it is skipped entirely
+rather than rendered with a blank address.
+
+**Only shown on a first-ever decision**, never on a privacy-policy
+re-confirmation. A re-confirmation re-asks the telemetry question only —
+showing an unchecked box again and processing it would silently downgrade
+an existing marketing opt-in to a decline the moment someone re-confirms
+telemetry consent for an unrelated reason. A site owner who missed the
+question the first time, or whose site upgraded to 0.2.0 after already
+answering telemetry, has no way to opt in later yet through
+`render_settings_section()` — that form's one button toggles telemetry
+consent to its opposite state, and adding an unrelated checkbox to it
+would let changing your marketing answer accidentally flip your telemetry
+answer too. A genuinely independent settings toggle for this is a known,
+tracked gap, not an oversight.
+
+**What an older SDK build does:** nothing different at all. The checkbox
+and its fields are additive — an SDK built before 0.2.0 never renders the
+checkbox and never sends a `marketing_*` field, and the consent endpoint
+treats every one of those fields as optional. Nothing about upgrading
+your plugin's SDK copy to 0.2.0 changes behaviour for a site that was
+already running an older copy until that site's owner is shown the
+checkbox for the first time (which, per the rule above, only happens on
+their next first-ever telemetry decision — already-decided sites see
+nothing new until this SDK gains the settings-page path noted above).
+
 ---
 
 ## Deactivation survey
@@ -1377,6 +1429,24 @@ real, current edges, not hedging:
   development and testing happens on current PHP — if you're deploying to a
   genuinely old PHP 7.2 host, treat that combination as less exercised than
   the rest.
+- **The marketing opt-in (0.2.0+) has no path to change the decision later
+  outside a fresh first-ever telemetry decision.** See
+  ["Marketing opt-in"](#marketing-opt-in) above for why
+  `render_settings_section()` doesn't offer it — its one button already
+  toggles telemetry consent, and bolting an unrelated checkbox onto that
+  form would let changing your marketing answer accidentally flip your
+  telemetry answer too. A site that already answered telemetry consent
+  before upgrading to 0.2.0 has genuinely no way to opt in until a
+  dedicated, independent settings control exists for this — tracked, not
+  forgotten.
+- **The marketing opt-in has no coverage against a real backend.**
+  `tests/integration/ConsentCheckTest.php` proves telemetry consent
+  end-to-end against a live Appneck API; the equivalent pass for the
+  marketing fields on `/sdk/v1/consent` has not been run — the unit and
+  Feature-test coverage (this package's `ConsentTest`/`ConsentNoticeTest`/
+  `MarketingConsentTest`, and the API's own
+  `MarketingConsentEndpointTest`) is real, but a live end-to-end click is
+  still owed before this ships to a real customer's plugin.
 
 None of these block using the SDK — they're the honest state of what's
 solid versus what has an open edge, so you can decide what matters for your
