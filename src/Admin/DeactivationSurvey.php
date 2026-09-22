@@ -346,9 +346,13 @@ function renderQuestions() {
 				var choice = choices[cc];
 				var choiceText = (choice && typeof choice === "object") ? choice.text : choice;
 				var needsText = !!(choice && typeof choice === "object" && choice.requires_text);
+				// The org panel admin sets this per choice, falling back to a
+				// generic prompt when left unset — never a required field,
+				// so an empty placeholder is a normal state, not a bug.
+				var followupPlaceholder = (choice && typeof choice === "object" && choice.placeholder) ? choice.placeholder : "Optional - tell us more";
 				body += \'<label><input type="radio" name="\' + name + \'" value="\' + esc(choiceText) + \'" data-appneck-choice-index="\' + cc + \'" data-appneck-needs-text="\' + (needsText ? "1" : "0") + \'"> \' + esc(choiceText) + "</label>";
 				if (needsText) {
-					body += \'<div class="appneck-sdk-survey__followup" data-appneck-followup-index="\' + cc + \'" hidden><textarea maxlength="\' + cfg.maxLength + \'" placeholder="Optional - tell us more"></textarea></div>\';
+					body += \'<div class="appneck-sdk-survey__followup" data-appneck-followup-index="\' + cc + \'" hidden><textarea maxlength="\' + cfg.maxLength + \'" placeholder="\' + esc(followupPlaceholder) + \'"></textarea></div>\';
 				}
 			}
 			body += "</fieldset>";
