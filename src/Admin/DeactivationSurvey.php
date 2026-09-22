@@ -229,6 +229,9 @@ final class DeactivationSurvey {
 .appneck-sdk-survey__question textarea,.appneck-sdk-survey__question select{width:100%;min-height:90px;border:1px solid #d5d8dc;border-radius:8px;padding:10px 12px;font-size:14px;font-family:inherit;box-sizing:border-box;transition:border-color .15s ease,box-shadow .15s ease}
 .appneck-sdk-survey__question select{min-height:auto;max-width:100%}
 .appneck-sdk-survey__question textarea:focus,.appneck-sdk-survey__question select:focus{outline:none;border-color:#9333ea;box-shadow:0 0 0 3px rgba(147,51,234,.15)}
+.appneck-sdk-survey__followup{margin:2px 0 10px 24px}
+.appneck-sdk-survey__followup textarea{width:100%;min-height:60px;border:1px solid #d5d8dc;border-radius:8px;padding:8px 10px;font-size:13px;font-family:inherit;box-sizing:border-box}
+.appneck-sdk-survey__followup textarea:focus{outline:none;border-color:#9333ea;box-shadow:0 0 0 3px rgba(147,51,234,.15)}
 .appneck-sdk-survey__rating{display:flex;gap:8px;flex-wrap:wrap}
 .appneck-sdk-survey__rating label{display:flex;align-items:center;gap:5px;margin:0;height:38px;padding:0 12px;border:1px solid #d5d8dc;border-radius:8px;cursor:pointer;font-size:14px;transition:border-color .15s ease,background .15s ease}
 .appneck-sdk-survey__rating label:has(input:checked){border-color:#9333ea;background:#f5f3ff;color:#6b21a8;font-weight:600}
@@ -337,6 +340,18 @@ function renderQuestions() {
 		} else if (q.type === "text_area") {
 			body += \'<label class="appneck-sdk-survey__label" for="\' + name + \'">\' + esc(q.text) + "</label>";
 			body += \'<textarea id="\' + name + \'" name="\' + name + \'" maxlength="\' + cfg.maxLength + \'"></textarea>\';
+		} else if (q.type === "conditional") {
+			body += "<fieldset><legend>" + esc(q.text) + "</legend>";
+			for (var cc = 0; cc < choices.length; cc++) {
+				var choice = choices[cc];
+				var choiceText = (choice && typeof choice === "object") ? choice.text : choice;
+				var needsText = !!(choice && typeof choice === "object" && choice.requires_text);
+				body += \'<label><input type="radio" name="\' + name + \'" value="\' + esc(choiceText) + \'" data-appneck-choice-index="\' + cc + \'" data-appneck-needs-text="\' + (needsText ? "1" : "0") + \'"> \' + esc(choiceText) + "</label>";
+				if (needsText) {
+					body += \'<div class="appneck-sdk-survey__followup" data-appneck-followup-index="\' + cc + \'" hidden><textarea maxlength="\' + cfg.maxLength + \'" placeholder="Optional - tell us more"></textarea></div>\';
+				}
+			}
+			body += "</fieldset>";
 		}
 		// An unknown type — a newer server than this copy of the SDK —
 		// produces no body and is skipped rather than guessed at.
@@ -344,6 +359,14 @@ function renderQuestions() {
 		html += \'<div class="appneck-sdk-survey__question" data-appneck-question="\' + esc(q.id) + \'" data-appneck-type="\' + esc(q.type) + \'">\' + body + "</div>";
 	}
 	fields.innerHTML = html;
+}
+
+function closestQuestionBlock(el) {
+	while (el && el !== fields) {
+		if (el.getAttribute && el.hasAttribute("data-appneck-question")) { return el; }
+		el = el.parentNode;
+	}
+	return null;
 }
 
 function collect() {
@@ -358,6 +381,17 @@ function collect() {
 			var list = [];
 			for (var c = 0; c < checked.length; c++) { list.push(checked[c].value); }
 			if (list.length) { values[id] = list; }
+		} else if (type === "conditional") {
+			var picked = block.querySelector("input:checked");
+			if (picked) {
+				var entry = { value: picked.value };
+				var idx = picked.getAttribute("data-appneck-choice-index");
+				var followup = block.querySelector(\'[data-appneck-followup-index="\' + idx + \'"] textarea\');
+				if (followup && !followup.parentNode.hasAttribute("hidden") && followup.value !== "") {
+					entry.text = followup.value;
+				}
+				values[id] = entry;
+			}
 		} else if (type === "radio" || type === "rating") {
 			var one = block.querySelector("input:checked");
 			if (one) { values[id] = one.value; }
@@ -429,6 +463,24 @@ document.addEventListener("keydown", function (event) {
 }, false);
 
 document.addEventListener("click", intercept, false);
+
+// Reveals the one follow-up field belonging to whichever conditional
+// choice is now selected, and hides every other follow-up in that same
+// question — a plain "change" listener on the container rather than one
+// per radio, since renderQuestions() rebuilds the whole list on every
+// modal open.
+fields.addEventListener("change", function (event) {
+	var input = event.target;
+	if (!input || !input.getAttribute || input.getAttribute("data-appneck-choice-index") === null) { return; }
+	var block = closestQuestionBlock(input);
+	if (!block) { return; }
+	var followups = block.querySelectorAll("[data-appneck-followup-index]");
+	for (var i = 0; i < followups.length; i++) { followups[i].setAttribute("hidden", "hidden"); }
+	if (input.getAttribute("data-appneck-needs-text") === "1") {
+		var shown = block.querySelector(\'[data-appneck-followup-index="\' + input.getAttribute("data-appneck-choice-index") + \'"]\');
+		if (shown) { shown.removeAttribute("hidden"); }
+	}
+}, false);
 
 skipButton.addEventListener("click", function () { deactivate(); }, false);
 
@@ -548,6 +600,24 @@ submitButton.addEventListener("click", function () {
 
 		foreach ( $decoded as $id => $value ) {
 			if ( ! is_string( $id ) ) {
+				continue;
+			}
+
+			// conditional's shape: {value: <chosen choice>, text?: <optional
+			// follow-up>} — an assoc array with a 'value' key, unlike a
+			// checkbox's plain numeric-indexed list. Checked first so it is
+			// never mistaken for one.
+			if ( is_array( $value ) && array_key_exists( 'value', $value ) ) {
+				$clean = array();
+
+				$clean['value'] = is_scalar( $value['value'] ) ? (string) $value['value'] : '';
+
+				if ( isset( $value['text'] ) && is_scalar( $value['text'] ) ) {
+					$clean['text'] = (string) $value['text'];
+				}
+
+				$values[ $id ] = $clean;
+
 				continue;
 			}
 

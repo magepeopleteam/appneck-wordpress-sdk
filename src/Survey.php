@@ -307,6 +307,38 @@ final class Survey {
 					}
 					break;
 
+				case 'conditional':
+					// $value is {value: <chosen choice text>, text?: <optional
+					// follow-up>} — see DeactivationSurvey::posted_answers(),
+					// the only place that shape is built. $choices here is a
+					// list of {text, requires_text} objects, not bare
+					// strings, so the choice text has to be pulled out of
+					// each one before comparing.
+					$choice_texts = array();
+					foreach ( $choices as $choice ) {
+						if ( is_array( $choice ) && isset( $choice['text'] ) ) {
+							$choice_texts[] = $choice['text'];
+						}
+					}
+
+					$selected = is_array( $value ) && isset( $value['value'] ) ? $value['value'] : null;
+
+					if ( ! is_string( $selected ) || ! in_array( $selected, $choice_texts, true ) ) {
+						$errors[ $id ] = 'Please choose one of the listed options.';
+						break;
+					}
+
+					// Optional even for a choice the admin marked
+					// requires_text — that flag sets an expectation for the
+					// modal to reveal a field, never a requirement the SDK
+					// enforces.
+					$follow_up = isset( $value['text'] ) ? $value['text'] : null;
+
+					if ( null !== $follow_up && ( ! is_string( $follow_up ) || $this->length( $follow_up ) > self::TEXT_AREA_MAX_LENGTH ) ) {
+						$errors[ $id ] = 'Please keep the extra detail under ' . self::TEXT_AREA_MAX_LENGTH . ' characters.';
+					}
+					break;
+
 				default:
 					// A type this SDK version does not know how to check.
 					// Not an error the owner can fix, and the server will
@@ -423,6 +455,26 @@ final class Survey {
 				}
 
 				$answers[] = array( 'question_id' => (string) $id, 'value' => (int) $value );
+
+				continue;
+			}
+
+			if ( 'conditional' === $types[ $id ] ) {
+				$selected = is_array( $value ) && isset( $value['value'] ) ? $value['value'] : null;
+
+				if ( ! is_string( $selected ) || '' === trim( $selected ) ) {
+					continue;
+				}
+
+				$answer = array( 'question_id' => (string) $id, 'value' => $selected );
+
+				$follow_up = isset( $value['text'] ) ? $value['text'] : null;
+
+				if ( is_string( $follow_up ) && '' !== trim( $follow_up ) ) {
+					$answer['text'] = $follow_up;
+				}
+
+				$answers[] = $answer;
 
 				continue;
 			}

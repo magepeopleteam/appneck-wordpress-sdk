@@ -25,8 +25,9 @@ class SurveyTest extends TestCase {
 	const RADIO_ID    = '11111111-1111-7111-8111-111111111111';
 	const CHECKBOX_ID = '22222222-2222-7222-8222-222222222222';
 	const RATING_ID   = '33333333-3333-7333-8333-333333333333';
-	const DROPDOWN_ID = '44444444-4444-7444-8444-444444444444';
-	const TEXT_ID     = '55555555-5555-7555-8555-555555555555';
+	const DROPDOWN_ID    = '44444444-4444-7444-8444-444444444444';
+	const TEXT_ID        = '55555555-5555-7555-8555-555555555555';
+	const CONDITIONAL_ID = '66666666-6666-7666-8666-666666666666';
 
 	/** @var QueueingTransport */
 	private $transport;
@@ -95,6 +96,16 @@ class SurveyTest extends TestCase {
 				'text'     => 'Anything else?',
 				'options'  => null,
 			),
+			array(
+				'id'       => self::CONDITIONAL_ID,
+				'position' => 6,
+				'type'     => 'conditional',
+				'text'     => 'Why are you really leaving?',
+				'options'  => array( 'choices' => array(
+					array( 'text' => 'Found a better plugin', 'requires_text' => false ),
+					array( 'text' => 'Other', 'requires_text' => true ),
+				) ),
+			),
 		);
 	}
 
@@ -125,7 +136,7 @@ class SurveyTest extends TestCase {
 
 		$questions = $survey->questions();
 
-		$this->assertCount( 5, $questions );
+		$this->assertCount( 6, $questions );
 		$this->assertSame( self::RADIO_ID, $questions[0]['id'] );
 		$this->assertSame( 'radio', $questions[0]['type'] );
 		$this->assertSame( 'Why are you deactivating?', $questions[0]['text'] );
@@ -143,7 +154,7 @@ class SurveyTest extends TestCase {
 		$survey->questions();
 		$before = $this->transport->count();
 
-		$this->assertCount( 5, $survey->questions() );
+		$this->assertCount( 6, $survey->questions() );
 		$this->assertSame( $before, $this->transport->count(), 'the second read came from the cache' );
 	}
 
@@ -175,7 +186,7 @@ class SurveyTest extends TestCase {
 		$this->assertTrue( $this->logger->contains( 'Could not fetch the uninstall survey' ) );
 
 		$this->queue_questions();
-		$this->assertCount( 5, $survey->questions(), 'the next attempt asks again' );
+		$this->assertCount( 6, $survey->questions(), 'the next attempt asks again' );
 	}
 
 	public function test_an_unreachable_api_yields_no_survey_rather_than_an_error(): void {
@@ -197,7 +208,7 @@ class SurveyTest extends TestCase {
 
 		$registered = $this->survey();
 		$this->queue_questions();
-		$this->assertCount( 5, $registered->questions() );
+		$this->assertCount( 6, $registered->questions() );
 	}
 
 	public function test_a_malformed_question_is_dropped_rather_than_rendered_blank(): void {
@@ -243,7 +254,7 @@ class SurveyTest extends TestCase {
 		$questions = $survey->questions( true ); // force, to prove the SKIP is the circuit, not the cache TTL
 
 		$this->assertSame( $before, $this->transport->count(), 'an open circuit must not attempt a request' );
-		$this->assertCount( 5, $questions );
+		$this->assertCount( 6, $questions );
 	}
 
 	/**
@@ -292,7 +303,7 @@ class SurveyTest extends TestCase {
 		$this->transport->queue( Response::from_http( 500, array(), '{"message":"boom"}' ) );
 		$questions = $survey->questions( true );
 
-		$this->assertCount( 5, $questions, 'a failed fetch must fall back to the last cached answer, not an empty one' );
+		$this->assertCount( 6, $questions, 'a failed fetch must fall back to the last cached answer, not an empty one' );
 	}
 
 	/**
@@ -311,7 +322,7 @@ class SurveyTest extends TestCase {
 		$this->transport->queue( Response::from_transport_error( 'Operation timed out after 3000 milliseconds' ) );
 		$questions = $survey->questions( true );
 
-		$this->assertCount( 5, $questions, 'a timeout must fall back to the last cached answer, not an empty one' );
+		$this->assertCount( 6, $questions, 'a timeout must fall back to the last cached answer, not an empty one' );
 	}
 
 	public function test_a_failed_fetch_records_a_failure_on_the_circuit(): void {
@@ -342,7 +353,7 @@ class SurveyTest extends TestCase {
 		$survey = $this->survey(); // no RealtimeConfig at all
 		$this->queue_questions();
 
-		$this->assertCount( 5, $survey->questions() );
+		$this->assertCount( 6, $survey->questions() );
 	}
 
 	public function test_forget_clears_the_cached_questions(): void {
@@ -440,6 +451,53 @@ class SurveyTest extends TestCase {
 		$this->assertSame( array(), $survey->validate( array( 'not-a-question' => 'value' ) ) );
 	}
 
+	public function test_a_valid_conditional_answer_with_follow_up_text_passes(): void {
+		$survey = $this->survey();
+		$this->queue_questions();
+
+		$this->assertSame(
+			array(),
+			$survey->validate( array( self::CONDITIONAL_ID => array( 'value' => 'Other', 'text' => 'It stopped working after an update.' ) ) )
+		);
+	}
+
+	/**
+	 * requires_text is a hint for the modal to reveal a field, never a
+	 * requirement the SDK enforces — omitting the follow-up must still
+	 * pass, even for a choice marked requires_text.
+	 */
+	public function test_a_conditional_answer_may_omit_the_follow_up_text(): void {
+		$survey = $this->survey();
+		$this->queue_questions();
+
+		$this->assertSame(
+			array(),
+			$survey->validate( array( self::CONDITIONAL_ID => array( 'value' => 'Other' ) ) )
+		);
+	}
+
+	public function test_a_conditional_value_not_on_the_list_is_rejected(): void {
+		$survey = $this->survey();
+		$this->queue_questions();
+
+		$this->assertArrayHasKey(
+			self::CONDITIONAL_ID,
+			$survey->validate( array( self::CONDITIONAL_ID => array( 'value' => 'Invented' ) ) )
+		);
+	}
+
+	public function test_an_over_long_conditional_follow_up_is_rejected(): void {
+		$survey = $this->survey();
+		$this->queue_questions();
+
+		$this->assertArrayHasKey(
+			self::CONDITIONAL_ID,
+			$survey->validate( array(
+				self::CONDITIONAL_ID => array( 'value' => 'Other', 'text' => str_repeat( 'a', Survey::TEXT_AREA_MAX_LENGTH + 1 ) ),
+			) )
+		);
+	}
+
 	// -----------------------------------------------------------------
 	// Submission
 	// -----------------------------------------------------------------
@@ -478,6 +536,53 @@ class SurveyTest extends TestCase {
 		$this->assertSame( array( 'Speed', 'Price' ), $byId[ self::CHECKBOX_ID ] );
 		// Cast so the dashboard does not tally "4" and 4 separately.
 		$this->assertSame( 4, $byId[ self::RATING_ID ] );
+	}
+
+	public function test_a_conditional_answer_is_submitted_with_its_follow_up_text(): void {
+		$survey = $this->survey();
+		$this->queue_questions();
+		$questions = $survey->questions();
+		$this->queue_created();
+
+		$survey->submit(
+			array( self::CONDITIONAL_ID => array( 'value' => 'Other', 'text' => 'It stopped working after an update.' ) ),
+			$questions
+		);
+
+		$body = json_decode( $this->transport->last_request()['body'], true );
+		$byId = array();
+		foreach ( $body['answers'] as $answer ) {
+			$byId[ $answer['question_id'] ] = $answer;
+		}
+
+		$this->assertSame( 'Other', $byId[ self::CONDITIONAL_ID ]['value'] );
+		$this->assertSame( 'It stopped working after an update.', $byId[ self::CONDITIONAL_ID ]['text'] );
+	}
+
+	/**
+	 * The follow-up is optional: a chosen value with no text still submits,
+	 * and the wire payload simply carries no 'text' key for it rather than
+	 * an empty string.
+	 */
+	public function test_a_conditional_answer_without_follow_up_text_omits_the_text_key(): void {
+		$survey = $this->survey();
+		$this->queue_questions();
+		$questions = $survey->questions();
+		$this->queue_created();
+
+		$survey->submit(
+			array( self::CONDITIONAL_ID => array( 'value' => 'Found a better plugin' ) ),
+			$questions
+		);
+
+		$body = json_decode( $this->transport->last_request()['body'], true );
+		$byId = array();
+		foreach ( $body['answers'] as $answer ) {
+			$byId[ $answer['question_id'] ] = $answer;
+		}
+
+		$this->assertSame( 'Found a better plugin', $byId[ self::CONDITIONAL_ID ]['value'] );
+		$this->assertArrayNotHasKey( 'text', $byId[ self::CONDITIONAL_ID ] );
 	}
 
 	public function test_unanswered_questions_are_omitted_rather_than_sent_blank(): void {
