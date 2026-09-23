@@ -377,6 +377,34 @@ final class Consent {
 	 * (consent_events) regardless.
 	 */
 	public function forget() {
+		$this->reset();
+	}
+
+	/**
+	 * Clears the local decision so needs_decision() is true again and the
+	 * (un-dismissible) notice reappears on the next admin page load — as
+	 * if consent had never been asked. Unlike forget(), this is meant to
+	 * be called while the plugin stays active: a plugin author's own
+	 * "ask again" action (a settings-page button, a WP-CLI command),
+	 * wired to whatever UI they choose — the SDK itself exposes no such
+	 * button. `$sdk->consent()->reset()` is the whole call.
+	 *
+	 * Deliberately does not contact the server. The server's
+	 * `installations.consent_status` and the permanent consent_events
+	 * history are left exactly as they were — same as forget() — because
+	 * clearing a local prompt is not itself a decision. The next real
+	 * answer (accept()/reject()) syncs as normal and appends a fresh
+	 * consent_events row, which is the durable record that matters.
+	 *
+	 * Deliberately does not touch Telemetry either. is_refused() (see
+	 * Telemetry's class doc) only ever checks is_rejected(), and a reset
+	 * status reads back as `pending`, not `rejected` — pending "changes
+	 * nothing" for track(), by the same rule a site that has simply never
+	 * answered yet behaves normally. So telemetry keeps doing exactly what
+	 * it did the moment before this call, right up until a new decision
+	 * is made.
+	 */
+	public function reset() {
 		$this->unschedule();
 		$this->delete_option( 'consent' );
 	}
