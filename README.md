@@ -604,6 +604,29 @@ because `track()` reads it on page loads where the credentials are never
 touched. `Sdk::uninstall()` deletes it; the server keeps the permanent
 `consent_events` history regardless.
 
+### Asking again, on purpose
+
+To re-show the consent prompt to a site owner who already answered —
+accepted or rejected — call:
+
+```php
+$sdk->consent()->reset();
+```
+
+This clears the local decision only, so `needs_decision()` is true again
+and the (un-dismissible) notice reappears on the next admin page load, as
+if consent had never been asked. It is not wired to anything in the SDK
+itself — no button, no schedule — the host plugin decides when and how to
+offer it (a settings-page action, a WP-CLI command, whatever fits).
+
+It does **not** contact the server: `installations.consent_status` and
+the permanent `consent_events` history are left exactly as they were,
+same as `forget()`. The next real answer re-syncs and appends a fresh
+consent event, which is the durable record that matters — clearing the
+local prompt is not itself a decision. It also does not affect telemetry:
+a reset status reads back as `pending`, and pending "changes nothing" for
+`track()` — the same as a site that has simply never answered yet.
+
 ### What this consent is *not*
 
 `is_accepted()` answers exactly one question: **may Appneck collect

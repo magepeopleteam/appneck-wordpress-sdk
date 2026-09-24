@@ -27,9 +27,10 @@ class DeactivationSurveyTest extends TestCase {
 	const INSTALL_ID     = '019fb200-0000-7000-8000-eeeeeeeeeeee';
 	const BASE_URL       = 'https://api.example.test';
 
-	const RADIO_ID  = '11111111-1111-7111-8111-111111111111';
-	const RATING_ID = '33333333-3333-7333-8333-333333333333';
-	const TEXT_ID   = '55555555-5555-7555-8555-555555555555';
+	const RADIO_ID       = '11111111-1111-7111-8111-111111111111';
+	const RATING_ID      = '33333333-3333-7333-8333-333333333333';
+	const TEXT_ID        = '55555555-5555-7555-8555-555555555555';
+	const CONDITIONAL_ID = '66666666-6666-7666-8666-666666666666';
 
 	const KEY = 'abc123key';
 
@@ -98,6 +99,16 @@ class DeactivationSurveyTest extends TestCase {
 				'type'     => 'text_area',
 				'text'     => 'Anything else?',
 				'options'  => null,
+			),
+			array(
+				'id'       => self::CONDITIONAL_ID,
+				'position' => 4,
+				'type'     => 'conditional',
+				'text'     => 'Why are you really leaving?',
+				'options'  => array( 'choices' => array(
+					array( 'text' => 'Found a better plugin', 'requires_text' => false ),
+					array( 'text' => 'Other', 'requires_text' => true ),
+				) ),
 			),
 		);
 
@@ -226,7 +237,7 @@ class DeactivationSurveyTest extends TestCase {
 
 		$result = $this->ajax( 'questions' );
 
-		$this->assertCount( 3, $result['questions'] );
+		$this->assertCount( 4, $result['questions'] );
 		$this->assertSame( 'Why are you deactivating?', $result['questions'][0]['text'] );
 	}
 
@@ -285,7 +296,7 @@ class DeactivationSurveyTest extends TestCase {
 
 		$result = $this->ajax( 'questions' );
 
-		$this->assertCount( 3, $result['questions'], 'the modal must show the CURRENT survey, not the stale cache' );
+		$this->assertCount( 4, $result['questions'], 'the modal must show the CURRENT survey, not the stale cache' );
 		$this->assertSame( 'Why are you deactivating?', $result['questions'][0]['text'] );
 	}
 
@@ -302,7 +313,7 @@ class DeactivationSurveyTest extends TestCase {
 		// Nothing queued for the next request: unreachable.
 		$result = $this->ajax( 'questions' );
 
-		$this->assertCount( 3, $result['questions'], 'a live-fetch failure must fall back to the warm cache' );
+		$this->assertCount( 4, $result['questions'], 'a live-fetch failure must fall back to the warm cache' );
 	}
 
 	/**
@@ -339,7 +350,7 @@ class DeactivationSurveyTest extends TestCase {
 		$result = $modal->handle_ajax();
 
 		$this->assertSame( $before, $this->transport->count(), 'an open circuit must not attempt a request' );
-		$this->assertCount( 3, $result['questions'] );
+		$this->assertCount( 4, $result['questions'] );
 	}
 
 	// -----------------------------------------------------------------
@@ -364,6 +375,41 @@ class DeactivationSurveyTest extends TestCase {
 
 		$body = json_decode( $this->transport->last_request()['body'], true );
 		$this->assertCount( 3, $body['answers'] );
+	}
+
+	/**
+	 * The one answer shape that is not a scalar or a plain list: {value,
+	 * text}, decoded by posted_answers() and round-tripped through
+	 * Survey::validate()/submit() exactly like the JS collect() function
+	 * would send it.
+	 */
+	public function test_a_conditional_answer_with_follow_up_text_is_submitted(): void {
+		$this->queue_questions();
+		$this->transport->queue( Response::from_http( 201, array(), json_encode( array( 'id' => 'r1' ) ) ) );
+
+		$result = $this->ajax(
+			'submit',
+			array(
+				self::CONDITIONAL_ID => array( 'value' => 'Other', 'text' => 'It broke after an update.' ),
+			)
+		);
+
+		$this->assertTrue( $result['submitted'] );
+
+		$body = json_decode( $this->transport->last_request()['body'], true );
+		$this->assertSame( self::CONDITIONAL_ID, $body['answers'][0]['question_id'] );
+		$this->assertSame( 'Other', $body['answers'][0]['value'] );
+		$this->assertSame( 'It broke after an update.', $body['answers'][0]['text'] );
+	}
+
+	public function test_a_conditional_answer_with_a_value_outside_the_choices_is_a_field_error(): void {
+		$this->queue_questions();
+
+		$result = $this->ajax( 'submit', array( self::CONDITIONAL_ID => array( 'value' => 'Invented' ) ) );
+
+		$this->assertArrayHasKey( 'errors', $result );
+		$this->assertArrayHasKey( self::CONDITIONAL_ID, $result['errors'] );
+		$this->assertSame( 1, $this->transport->count(), 'nothing was sent' );
 	}
 
 	public function test_a_skipped_survey_sends_nothing(): void {
