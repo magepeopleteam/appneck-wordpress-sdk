@@ -43,7 +43,7 @@ final class Sdk {
 	// "get product update emails" toggle on the SDK actually having
 	// MarketingConsent needs a real version to check against, unlike the
 	// bug fixes (§28, §30-32) that left this constant alone on purpose.
-	const VERSION = '0.2.0';
+	const VERSION = '0.3.0';
 
 	/**
 	 * @param string      $api_key          Product API key (pk_...).

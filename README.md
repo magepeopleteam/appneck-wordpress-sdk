@@ -20,7 +20,7 @@ follows the order you'll actually touch these pieces in as a plugin author.)*
 - [Installing it in a plugin](#installing-it-in-a-plugin) — bundled vs. Composer, in full
 - [Version safety](#version-safety-why-the-loader-exists)
 - [It will not take down the host site](#it-will-not-take-down-the-host-site) — error handling
-- [Lifecycle](#lifecycle) — activation, deactivation, uninstall.php
+- [Lifecycle](#lifecycle) — activation, deactivation, updates, uninstall.php
 - [Telemetry](#telemetry) — `track()`, custom events, the heartbeat
 - [Consent](#consent) — what's automatic, what you configure, what not to do
 - [Deactivation survey](#deactivation-survey) — configured in the Org Panel, not code
@@ -380,6 +380,26 @@ reactivates that record instead of creating a duplicate, and correctly
 declines to re-issue its secret, which the SDK expects and keeps the
 stored one.
 
+### Updates (journal §47)
+
+WordPress never runs the activation hook on an update — dashboard,
+auto-update, WP-CLI, FTP or Composer alike — so the SDK does not rely on it.
+On every load it compares the plugin version and SDK version it last saw
+running (one autoloaded option) with what is running now. On a change it
+does exactly what activation does, still with **no** network call on the page
+load: it schedules a registration refresh, upgrades the events table, and puts
+the flush timer back. The server then records the new version and fires its
+version-changed event. A plugin that gains the SDK in an update registers the
+same way, on its first load.
+
+`upgrader_process_complete` is deliberately not used: it runs inside the *old*
+code while the update is still in progress, and never fires for FTP or
+Composer deploys.
+
+If the flush timer ever goes missing (a cron-cleanup plugin, a migration, a
+restored database), `init` puts it back — unless the site owner refused
+consent, the one case it is meant to be absent.
+
 ### Multisite: lazily, once per site
 
 Each site in a network registers **itself**, the first time the cron or
@@ -470,6 +490,13 @@ A heartbeat is an ordinary event of type `heartbeat` on the same queue,
 sent in the same batch — not a private code path. That way the retry and
 partial-success behaviour is exercised constantly by the most common
 event there is, rather than being a rarely-tested branch.
+
+Every flush also carries a small top-level `versions` object — plugin, PHP,
+WordPress and WooCommerce versions — read **at send time**, never from a
+queued heartbeat, so a backlog written before an update cannot report the old
+version afterwards. This keeps WordPress and PHP upgrades current between
+plugin updates. The server orders these by its own receipt time and ignores a
+malformed object rather than rejecting the batch.
 
 ### What happens to each response
 
