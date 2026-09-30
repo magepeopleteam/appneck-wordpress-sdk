@@ -560,7 +560,7 @@ submitButton.addEventListener("click", function () {
 			return $this->fail_with( array( 'errors' => $errors ) );
 		}
 
-		$response = $this->survey->submit( $values, $questions );
+		$response = $this->survey->submit( $values, $questions, $this->current_respondent() );
 
 		// Deliberately reports success even when the submission failed.
 		// The modal's only remaining job is to let the deactivation
@@ -663,6 +663,32 @@ submitButton.addEventListener("click", function () {
 		}
 
 		return (bool) current_user_can( 'activate_plugins' );
+	}
+
+	/**
+	 * The logged-in user answering the survey — the person the plugin's
+	 * team would follow up with. Always a real account here: handle_ajax()
+	 * has already required `activate_plugins`, so there is no anonymous
+	 * visitor this could describe. Null outside WordPress or if the user
+	 * somehow cannot be resolved; the answers are still sent without it.
+	 *
+	 * @return array{name: string, email: string}|null
+	 */
+	private function current_respondent() {
+		if ( ! function_exists( 'wp_get_current_user' ) ) {
+			return null;
+		}
+
+		$user = wp_get_current_user();
+
+		if ( ! is_object( $user ) || empty( $user->ID ) ) {
+			return null;
+		}
+
+		return array(
+			'name'  => isset( $user->display_name ) ? (string) $user->display_name : '',
+			'email' => isset( $user->user_email ) ? (string) $user->user_email : '',
+		);
 	}
 
 	private function can_render() {

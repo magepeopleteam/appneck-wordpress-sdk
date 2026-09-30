@@ -720,6 +720,12 @@ intercepted and a modal asks your configured questions — radio, checkbox,
 rating, dropdown and free text, rendered from whatever the organization set
 up. Then the plugin deactivates.
 
+Each submission also carries the logged-in WordPress user who answered —
+display name and email — so your team can follow up from the Org Panel's
+Responses tab. It is read with `wp_get_current_user()` and sent with the
+answers; there is nothing to configure. If no user can be resolved, the
+answers are still sent without it.
+
 If the SDK could not read your plugin's name from its file header, set it so
 the prompt can say who is asking:
 
