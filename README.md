@@ -753,9 +753,10 @@ be worse than asking again.
 ### One attempt, no retry
 
 Unlike telemetry there is no queue and no retry. The moment has passed —
-the plugin is being deactivated as the request goes out — and the server
-records one response per installation anyway, so a resurrected submission
-days later would be a duplicate at best.
+the plugin is being deactivated as the request goes out, and a resurrected
+submission days later would be counted as a new, stale response. (The server
+keeps every survey an installation sends, treating only an identical
+resubmission within a few minutes as a duplicate.)
 
 **A failed submission is never shown to the site owner**, and that is
 forced rather than chosen: the only place to show it would be the admin
