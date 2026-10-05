@@ -273,7 +273,10 @@ final class ConsentNotice {
 		} else {
 			echo '<h2 class="appneck-sdk-optin__title">' . esc_html( self::TITLE ) . '</h2>';
 			echo '<p class="appneck-sdk-optin__body">' . esc_html( $this->body_text() ) . '</p>';
-			$this->render_shared_details();
+			// Hidden for now at the product owner's request (2026-10-05). Restore
+			// by uncommenting; SHARED_FIELDS and shared_items() are still pinned
+			// to the real payloads by ContactGateTest, so the list stays accurate.
+			// $this->render_shared_details();
 		}
 
 		if ( null !== $this->privacy_policy_url && '' !== $this->privacy_policy_url ) {

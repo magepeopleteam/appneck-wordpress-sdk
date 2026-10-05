@@ -91,7 +91,7 @@ say that this data is sent to you, and why.
 ### The opt-in a free plugin shows
 
 A card in the admin notices area: the product icon, **"Never miss an
-important update"**, a short explanation, a **What's shared?** toggle, and
+important update"**, a short explanation, and
 two buttons, **Allow & Continue →** and **Skip**.
 
 - **Allow & Continue** turns on usage data *and* update emails (security and
@@ -101,8 +101,11 @@ two buttons, **Allow & Continue →** and **Skip**.
   once the site has registered.
 - **Skip** refuses both and sends nothing.
 
-**What's shared?** lists exactly what the code sends. A test compares the
-list with the real request payloads, so they cannot drift apart:
+**What is shared** — exactly what the code sends; a test compares this list
+with the real request payloads (`ConsentNotice::SHARED_FIELDS`). The card's
+"What's shared?" toggle is hidden for now (commented out in
+`ConsentNotice::render()`), so state this list in your readme and privacy
+policy:
 
 - Your name and email (for update emails only)
 - Site URL

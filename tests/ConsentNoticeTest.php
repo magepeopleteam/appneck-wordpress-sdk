@@ -356,18 +356,14 @@ class ConsentNoticeTest extends TestCase {
 		$this->assertStringNotContainsString( 'type="checkbox"', $html, 'the separate marketing checkbox is gone' );
 	}
 
-	public function test_whats_shared_lists_every_disclosed_line_and_the_footnote(): void {
-		$notice = $this->notice_with_marketing();
-		$html   = $this->render_notice( $notice );
+	public function test_whats_shared_is_hidden_for_now(): void {
+		// Commented out in render() at the product owner's request
+		// (2026-10-05). When it is restored, bring back the check that every
+		// shared_items() line and the footnote are rendered.
+		$html = $this->render_notice( $this->notice_with_marketing() );
 
-		$this->assertStringContainsString( '<details', $html );
-		$this->assertStringContainsString( 'What&#039;s shared?', $html );
-
-		foreach ( $notice->shared_items() as $item ) {
-			$this->assertStringContainsString( htmlspecialchars( $item, ENT_QUOTES ), $html );
-		}
-
-		$this->assertStringContainsString( 'Nothing is sent if you skip.', $html );
+		$this->assertStringNotContainsString( '<details', $html );
+		$this->assertStringNotContainsString( 'What&#039;s shared?', $html );
 	}
 
 	public function test_the_product_icon_is_used_when_configured(): void {
