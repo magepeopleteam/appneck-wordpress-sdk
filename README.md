@@ -955,9 +955,26 @@ Want to render them yourself instead?
 
 ```php
 foreach ( $sdk->announcements()->visible() as $announcement ) {
-    // id, type, title, body, starts_at, expires_at
+    // id, type, title, body, body_html, starts_at, expires_at
 }
 ```
+
+### Formatted messages (since 0.5.0)
+
+An announcement's message can carry **bold, italic, underline, h3–h6
+headings, bulleted and numbered lists, quotes and links** (journal §90). The
+built-in renderer prints `body_html` through `wp_kses()` with a strict
+allowlist (only `http`/`https` links; no attributes except a link's `href`),
+balances unclosed tags, unwraps any link that is not an absolute http(s)
+address, and opens every link in a new tab with `rel="noopener noreferrer"`.
+The server sanitizes too, but the SDK never relies on that. If `body_html` is
+empty, or `wp_kses()` is missing, it prints the escaped plain `body` as before.
+
+If you render announcements yourself, **never echo `body_html` raw**. Escape
+`body` as before, or pass `body_html` through `wp_kses()` with an allowlist at
+least as strict as `AnnouncementNotices::BODY_ALLOWED_HTML`. SDKs older than
+0.5.0 ignore `body_html` and show `body`, which the server keeps as the
+message's plain-text copy.
 
 ### Consent-gated on free plugins (since 0.4.0)
 
